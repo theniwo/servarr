@@ -1,0 +1,488 @@
+---
+volumes:
+  bazarr_config:
+  jellyfin_cache:
+  jellyfin_config:
+  jellyseer_config:
+  jellystat-db_backup:
+  jellystat-db_backup_sql:
+  jellystat_backup-data:
+  jellystat_postgres-data:
+  jfa-go_data:
+  lazylibrarian_config:
+  lidarr_config:
+  nzbhydra2_config:
+  picard_config:
+  prowlarr_config:
+  radarr_config:
+  readarr_config:
+  recyclarr_config:
+  sabnzbd_config:
+  sonarr_config:
+  transmission_config:
+  vpn_config:
+  wizarr_database:
+  wizarr_steps:
+  data:
+    driver: rclone
+    driver_opts:
+      remote: 'data:'
+      allow_other: 'true'
+      vfs_cache_mode: writes
+      vfs_cache_max_size: 28G
+      vfs_cache_max_age: 5m
+      # poll_interval: 0
+  media:
+    driver: rclone
+    driver_opts:
+      remote: 'media:'
+      allow_other: 'true'
+      vfs_cache_mode: writes
+      vfs_cache_max_size: 20G
+      vfs_cache_max_age: 5m
+      # poll_interval: 0
+
+services:
+  bazarr:
+    image: lscr.io/linuxserver/bazarr:latest
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - bazarr_config:/config
+      - media:/mnt/MEDIA
+    ports:
+      - 6767:6767
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  flaresolverr:
+    # Used to bypass cloudflare captchas on 1337x
+    # DockerHub mirror flaresolverr/flaresolverr:latest
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      - vpn
+    env_file:
+      - ./global.env
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_HTML=${LOG_HTML:-false}
+      - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}
+    #Ports moved to vpn:
+    #ports:
+      #- "${PORT:-8191}:8191"
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  jellyfin:
+    image: jellyfin/jellyfin
+    hostname: jellyfin
+    env_file:
+      - ./global.env
+    # Optional - alternative address used for autodiscovery
+      - ./jellyfin.env
+    # user: uid:gid
+    # network_mode: 'host'
+    ports:
+      - 8096:8096
+    volumes:
+      - ./config.json:/jellyfin/jellyfin-web/config.json
+      - jellyfin_config:/config
+      #- /mnt/DATA/SERVICES/JELLYFIN/cache:/cache # changed as of 16. mar 25
+      #- jellyfin_cache:/cache # changed as of 24. Apr 25
+      - /cache/jellyfin:/cache
+      #- /scratch/cache/jellyfin:/cache
+      - media:/media
+      # - type: bind
+      #   source: /mnt/MEDIA
+      #   target: /media
+    restart: 'unless-stopped'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  jellyseerr:
+    image: fallenbagel/jellyseerr:latest
+    env_file:
+      - ./global.env
+    environment:
+      - LOG_LEVEL=info
+      - PORT=5055 # optional
+    ports:
+      - 5055:5055
+    volumes:
+      - jellyseer_config:/app/config
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  jellystat:
+    image: cyfershepard/jellystat:latest
+    env_file:
+      - ./db.env
+      - ./global.env
+    environment:
+      POSTGRES_IP: jellystat-db
+      POSTGRES_PORT: 5432
+    ports:
+      - "3000:3000" #Server Port
+    volumes:
+      - jellystat_backup-data:/app/backend/backup-data
+    depends_on:
+      - jellystat-db
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  jellystat-db:
+    env_file:
+      - ./db.env
+      - ./global.env
+    #image: postgres:15.2
+    image: postgres:16
+    environment:
+      POSTGRES_DB: 'jfstat'
+    volumes:
+      - jellystat_postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  jellystat-db_backup:
+    image: prodrigestivill/postgres-backup-local
+    #mem_limit: 512M
+    restart: unless-stopped
+    user: postgres:postgres
+    volumes:
+      - jellystat-db_backup:/backups
+      #- jellystat-db_backup_sql:/var/lib/postgresql/data # seems outdated
+    links:
+      - jellystat-db
+    depends_on:
+      jellystat-db:
+        condition: service_healthy
+    env_file:
+      - ./db.env
+      - ./global.env
+    environment:
+      - POSTGRES_DB=jfstat
+      - POSTGRES_HOST=jellystat-db
+      # Don't use "s here. He doesn't like it because he just eats them.
+      - BACKUP_DIR=/backups
+      #- BACKUP_DIR=/var/lib/postgresql/data
+      - BACKUP_SUFFIX=.sql.gz
+      - POSTGRES_EXTRA_OPTS=-Z6 --schema=public --blobs
+      - SCHEDULE=@daily
+      - BACKUP_KEEP_DAYS=7
+      - BACKUP_KEEP_WEEKS=4
+      - BACKUP_KEEP_MONTHS=6
+      - HEALTHCHECK_PORT=8080
+      # Create:
+      # 'https://hub.docker.com/r/prodrigestivill/postgres-backup-local'
+      # cd /var/lib/docker/volumes/servarr_jellystat-db_backup/_data/
+      # mkdir daily weekly monthly last
+      # chmod 777 *
+      # docker container exec servarr-jellystat-db_backup-1 ls /backups/last
+      # docker container exec servarr-jellystat-db_backup-1 /backup.sh
+      # Restore:
+      # Take Containers down and close all apps that could sync
+      # docker compose down jellystat-db_backup && docker volume rm servarr_jellystat_postgres-data
+      # docker exec -it servarr-jellystat-db-1 bash
+      # psql --username=$POSTGRES_USER --dbname=postgres -W
+      # SELECT * FROM pg_stat_activity WHERE datname = 'jfstat';
+      # SELECT pg_terminate_backend (<PID>) FROM pg_stat_activity WHERE pg_stat_activity.datname = 'jfstat';
+      # DROP DATABASE jfstat;
+      # CREATE DATABASE jfstat;
+      # EXIT
+      # zcat /backups/last/jfstat-latest.sql.gz | psql --username=$POSTGRES_USER --dbname=$POSTGRES_DATABASE -W
+      # Update:
+      # docker exec -it servarr-jellystat-db-1 bash
+      # psql --username=$POSTGRES_USER --dbname=postgres -W
+      # REINDEX DATABASE postgres;
+      # ALTER DATABASE postgres REFRESH COLLATION VERSION;
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  lazylibrarian:
+    image: lscr.io/linuxserver/lazylibrarian:latest
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - DOCKER_MODS=linuxserver/mods:universal-calibre|linuxserver/mods:lazylibrarian-ffmpeg #optional
+    volumes:
+      - lazylibrarian_config:/config
+      - /scratch/download:/downloads
+      - media:/mnt/MEDIA
+      #- /mnt/MEDIA/LECTIO/E-Books:/books
+      #- /mnt/MEDIA/AUDIO/Audiobooks/:/Audiobooks #optional
+      #- /mnt/MEDIA/AUDIO/Audioplays/:/Audioplays #optional
+    ports:
+      - 5299:5299
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  nzbhydra2:
+    image: lscr.io/linuxserver/nzbhydra2:latest
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      - vpn
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - nzbhydra2_config:/config
+      - /scratch/downloads:/data/downloads
+    #Ports moved to vpn:
+    #ports:
+      #- 5076:5076
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  picard:
+    image: mikenye/picard:latest
+    ports:
+      - "5801:5800"
+    volumes:
+      - picard_config:/config
+      - media:/mnt/MEDIA
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  prowlarr:
+    image: lscr.io/linuxserver/prowlarr:latest
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      - vpn
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - DNS_KEEP_NAMESERVER=on
+      - DOT=off
+    volumes:
+      - prowlarr_config:/config
+    #Ports moved to vpn:
+    #ports:
+      #- 9696:9696
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - /scratch/downloads:/data/downloads
+      - radarr_config:/config
+      - data:/mnt/DATA
+      - media:/mnt/MEDIA
+    ports:
+      - 7878:7878
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr
+    user: 1000:1000
+    #networks: [recyclarr]
+    volumes:
+      - recyclarr_config:/config
+    env_file:
+      - ./global.env
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  sabnzbd:
+    image: lscr.io/linuxserver/sabnzbd:latest
+    env_file:
+      - ./global.env
+      - ./sab.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - /scratch/downloads:/data/downloads
+      - sabnzbd_config:/config
+      - data:/mnt/DATA
+      - media:/mnt/MEDIA
+    ports:
+      - 8080:8080
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api?mode=version&apikey=$SABNZBD_APIKEY"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  sab-watchdog:
+    build: ./sab-watchdog
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
+    env_file:
+      - ./global.env
+      - ./sab.env
+    environment:
+      - SABNZBD_URL=http://sabnzbd:8080
+      - SABNZBD_CONTAINER=servarr-sabnzbd-1
+      - DISK_FREE_THRESHOLD_GB=1
+      - DEBUG_MODE=false
+    depends_on:
+      - sabnzbd
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  sonarr:
+    image: lscr.io/linuxserver/sonarr:latest
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - /scratch/downloads:/data/downloads
+      - sonarr_config:/config
+      - data:/mnt/DATA
+      - media:/mnt/MEDIA
+    ports:
+      - 8989:8989
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  transmission:
+    image: lscr.io/linuxserver/transmission:latest
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      - vpn
+    env_file:
+      - ./global.env
+      - ./transmission.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TRANSMISSION_WEB_HOME= #optional
+      - WHITELIST= #optional
+      - PEERPORT= #optional
+      - HOST_WHITELIST= #optional
+      - DNS_KEEP_NAMESERVER=on
+      - DOT=off
+    volumes:
+      - transmission_config:/config
+      - data:/mnt/DATA
+      - media:/mnt/MEDIA
+      - /scratch/download:/scratch/download
+    #Ports moved to vpn:
+    #ports:
+      #- 9091:9091
+      #- 51413:51413
+      #- 51413:51413/udp
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  vpn:
+    image: qmcgaw/gluetun
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - 5076:5076 # NZBHydra2 over VPN
+      - 9696:9696 # Prowlarr over VPN
+      - 8191:8191 # Flaresolverr over VPN
+      - 9091:9091 # Transmission over VPN
+      - 51413:51413 # Transmission over VPN
+      - 51413:51413/udp # Transmission over VPN
+    devices:
+      - /dev/net/tun
+    volumes:
+      - vpn_config:/gluetun
+    env_file:
+      - ./global.env
+      - ./vpn.env
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - OPENVPN_CUSTOM_CONFIG=/gluetun/myvpn.ovpn
+      - VPN_BLOCK_OUTSIDE_DNS=true
+      - DNS_KEEP_NAMESERVER=on
+      - DOT=off
+      - DNS=1.1.1.1
+      #- DNS=8.8.8.8,8.8.4.4
+      #- PUID=1000
+      #- PGID=1000
+      #- HTTP_CONTROL_SERVER_ADDRESS=:8181
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  wizarr:
+    image: ghcr.io/wizarrrr/wizarr:latest
+    restart: unless-stopped
+    #user: 1000:1000
+    env_file:
+      - ./global.env
+      - ./wizarr.env
+      #- ./secrets.env
+    #environment:
+      #- PUID=1000 #Set UID
+      #- PGID=1000 #Set GID
+    volumes:
+      - wizarr_database:/data/database
+      - wizarr_steps:/data/wizard_steps
+    ports:
+      - 5690:5690
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
