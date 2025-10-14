@@ -8,7 +8,6 @@ volumes:
   jellystat-db_backup_sql:
   jellystat_backup-data:
   jellystat_postgres-data:
-  jfa-go_data:
   lazylibrarian_config:
   lidarr_config:
   nzbhydra2_config:
