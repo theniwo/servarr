@@ -1,0 +1,22 @@
+---
+services:
+
+  # Experiment to fetch missing seasons, once last episode of previous season is finished
+  sonarr-webhook-listener:
+    build: ./sonarr-webhook-listener
+    #image: theniwo/sonarr-webhook-listener:latest
+    env_file:
+      - ./global.env
+      - ./sonarr.env
+    environment:
+      - SONARR_URL=http://sonarr:8989
+      - PUID=1000
+      - PGID=1000
+    ports:
+      - "5000:5000"
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
