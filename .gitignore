@@ -1,3 +1,2 @@
 *.env
-healthcheck.sh
 config.json
