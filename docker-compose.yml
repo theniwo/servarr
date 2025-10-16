@@ -375,6 +375,8 @@ services:
       - DEBUG_MODE=false
     depends_on:
       - sabnzbd
+    healthcheck:
+      test: "exit 0"
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
