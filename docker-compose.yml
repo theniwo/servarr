@@ -101,6 +101,7 @@ services:
       - /cache/jellyfin:/cache
       #- /scratch/cache/jellyfin:/cache
       - media:/media
+      # we use docker rclone plugin instead
       # - type: bind
       #   source: /mnt/MEDIA
       #   target: /media
