@@ -1,5 +1,10 @@
 ---
 volumes:
+  abr_config:
+  abr-db_data:
+  abr-db_backup:
+  abs_config:
+  abs_metadata:
   bazarr_config:
   jellyfin_cache:
   jellyfin_config:
@@ -42,6 +47,121 @@ volumes:
       # poll_interval: 0
 
 services:
+  abr:
+    image: markbeep/audiobookrequest:1
+    env_file:
+      - ./abr.env
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - ABR_APP__DEFAULT_REGION=de
+      #- ABR_APP__BASE_URL=/abr/
+      - ABR_DB__USE_POSTGRES=true
+      - ABR_DB__POSTGRES_HOST=abr-db
+    volumes:
+      - abr_config:/config
+    ports:
+      - 13379:8000
+    depends_on:
+      abr-db:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  abr-db:
+    env_file:
+      - ./abr-db.env
+      - ./global.env
+    image: postgres:16
+    volumes:
+      - abr-db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  abr-db_backup:
+    image: prodrigestivill/postgres-backup-local
+    #mem_limit: 512M
+    restart: unless-stopped
+    user: postgres:abr
+    volumes:
+      - abr-db_backup:/backups
+      #- abr-db_backup_sql:/var/lib/postgresql/data # seems outdated
+    links:
+      - abr-db
+    depends_on:
+      abr-db:
+        condition: service_healthy
+    env_file:
+      - ./abr-db.env
+      - ./global.env
+    environment:
+      - POSTGRES_DB=audiobookrequest
+      - POSTGRES_HOST=abr-db
+      # Don't use "s here. He doesn't like it because he just eats them.
+      - BACKUP_DIR=/backups
+      #- BACKUP_DIR=/var/lib/postgresql/data
+      - BACKUP_SUFFIX=.sql.gz
+      - POSTGRES_EXTRA_OPTS=-Z6 --schema=public --blobs
+      - SCHEDULE=@daily
+      - BACKUP_KEEP_DAYS=7
+      - BACKUP_KEEP_WEEKS=4
+      - BACKUP_KEEP_MONTHS=6
+      - HEALTHCHECK_PORT=8080
+      # Create:
+      # 'https://hub.docker.com/r/prodrigestivill/postgres-backup-local'
+      # cd /var/lib/docker/volumes/servarr_abr-db_backup/_data/
+      # mkdir daily weekly monthly last
+      # chmod 777 *
+      # docker container exec servarr-abr-db_backup-1 ls /backups/last
+      # docker container exec servarr-abr-db_backup-1 /backup.sh
+      # Restore:
+      # Take Containers down and close all apps that could sync
+      # docker compose down abr-db_backup && docker volume rm servarr_abr_postgres-data
+      # docker exec -it servarr-abr-db-1 bash
+      # psql --username=$POSTGRES_USER --dbname=postgres -W
+      # SELECT * FROM pg_stat_activity WHERE datname = 'audiobookrequest';
+      # SELECT pg_terminate_backend (<PID>) FROM pg_stat_activity WHERE pg_stat_activity.datname = 'audiobookrequest';
+      # DROP DATABASE audiobookrequest;
+      # CREATE DATABASE audiobookrequest;
+      # EXIT
+      # zcat /backups/last/audiobookrequest-latest.sql.gz | psql --username=$POSTGRES_USER --dbname=$POSTGRES_DATABASE -W
+      # Update:
+      # docker exec -it servarr-abr-db-1 bash
+      # psql --username=$POSTGRES_USER --dbname=postgres -W
+      # REINDEX DATABASE postgres;
+      # ALTER DATABASE postgres REFRESH COLLATION VERSION;
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  abs:
+    image: ghcr.io/advplyr/audiobookshelf:latest
+    ports:
+      - 13378:80
+    volumes:
+      - /mnt/MEDIA/AUDIO/Audiobooks:/mnt/audiobooks
+      - /mnt/MEDIA/AUDIO/Podcasts:/mnt/podcasts
+      - /mnt/MEDIA/AUDIO/Audioplays:/mnt/audioplays
+      - abs_config:/config
+      - abs_metadata:/metadata
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
     env_file:
@@ -133,7 +253,7 @@ services:
   jellystat:
     image: cyfershepard/jellystat:latest
     env_file:
-      - ./db.env
+      - ./jellystat-db.env
       - ./global.env
     environment:
       POSTGRES_IP: jellystat-db
@@ -152,7 +272,7 @@ services:
 
   jellystat-db:
     env_file:
-      - ./db.env
+      - ./jellystat-db.env
       - ./global.env
     #image: postgres:15.2
     image: postgres:16
@@ -179,7 +299,7 @@ services:
       jellystat-db:
         condition: service_healthy
     env_file:
-      - ./db.env
+      - ./jellystat-db.env
       - ./global.env
     environment:
       - POSTGRES_DB=jfstat
@@ -323,6 +443,26 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
+  readarr:
+    image: ghcr.io/hotio/readarr
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+    volumes:
+      - readarr_config:/config
+      - /scratch/downloads:/data/downloads
+      - media:/mnt/MEDIA
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
   recyclarr:
     image: ghcr.io/recyclarr/recyclarr
     user: 1000:1000
@@ -375,7 +515,8 @@ services:
       - DISK_FREE_THRESHOLD_GB=1
       - DEBUG_MODE=false
     depends_on:
-      - sabnzbd
+      sabnzbd:
+        condition: service_healthy
     healthcheck:
       test: "exit 0"
     labels:
