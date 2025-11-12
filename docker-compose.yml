@@ -216,7 +216,8 @@ services:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     network_mode: "service:vpn"  # use VPN
     depends_on:
-      - vpn
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
     environment:
@@ -293,7 +294,8 @@ services:
     volumes:
       - jellystat_backup-data:/app/backend/backup-data
     depends_on:
-      - jellystat-db
+      jellystat-db:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -399,7 +401,8 @@ services:
     image: lscr.io/linuxserver/nzbhydra2:latest
     network_mode: "service:vpn"  # use VPN
     depends_on:
-      - vpn
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
     environment:
@@ -434,7 +437,8 @@ services:
     image: lscr.io/linuxserver/prowlarr:latest
     network_mode: "service:vpn"  # use VPN
     depends_on:
-      - vpn
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
     environment:
