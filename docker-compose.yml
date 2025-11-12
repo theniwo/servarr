@@ -57,6 +57,7 @@ services:
       - PUID=1000
       - PGID=1000
       - ABR_APP__DEFAULT_REGION=de
+      - ABR_APP__DEBUG=false
       #- ABR_APP__BASE_URL=/abr/
       - ABR_DB__USE_POSTGRES=true
       - ABR_DB__POSTGRES_HOST=abr-db
@@ -183,6 +184,7 @@ services:
 
   deluge:
     image: lscr.io/linuxserver/deluge:latest
+    user: 1000:1000
     network_mode: "service:vpn"  # use VPN
     depends_on:
       vpn:
@@ -195,7 +197,7 @@ services:
       - DELUGE_LOGLEVEL=error #optional
     volumes:
       - deluge_config:/config
-      - /scratch/download:/scratch/download
+      - /scratch/download/torrent:/downloads
       - data:/mnt/DATA
       - media:/mnt/MEDIA
     #Ports moved to vpn:
