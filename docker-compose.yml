@@ -6,6 +6,7 @@ volumes:
   abs_config:
   abs_metadata:
   bazarr_config:
+  deluge_config:
   jellyfin_cache:
   jellyfin_config:
   jellyseer_config:
@@ -174,6 +175,35 @@ services:
       - media:/mnt/MEDIA
     ports:
       - 6767:6767
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  deluge:
+    image: lscr.io/linuxserver/deluge:latest
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      vpn:
+        condition: service_healthy
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - DELUGE_LOGLEVEL=error #optional
+    volumes:
+      - deluge_config:/config
+      - /scratch/download:/scratch/download
+      - data:/mnt/DATA
+      - media:/mnt/MEDIA
+    #Ports moved to vpn:
+    #ports:
+      #- 8112:8112
+      #- 6881:6881
+      #- 6881:6881/udp
+      #- 58846:58846 #optional
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -546,7 +576,8 @@ services:
     image: lscr.io/linuxserver/transmission:latest
     network_mode: "service:vpn"  # use VPN
     depends_on:
-      - vpn
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
       - ./transmission.env
@@ -561,9 +592,9 @@ services:
       - DOT=off
     volumes:
       - transmission_config:/config
+      - /scratch/download:/scratch/download
       - data:/mnt/DATA
       - media:/mnt/MEDIA
-      - /scratch/download:/scratch/download
     #Ports moved to vpn:
     #ports:
       #- 9091:9091
@@ -586,6 +617,10 @@ services:
       - 9091:9091 # Transmission over VPN
       - 51413:51413 # Transmission over VPN
       - 51413:51413/udp # Transmission over VPN
+      - 8112:8112 # Deluge
+      - 6881:6881 # Deluge
+      - 6881:6881/udp # Deluge
+      - 58846:58846 #optional # Deluge
     devices:
       - /dev/net/tun
     volumes:
