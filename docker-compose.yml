@@ -56,6 +56,7 @@ services:
     environment:
       - PUID=1000
       - PGID=1000
+      - ABR_APP__LOG_LEVEL=ERROR
       - ABR_APP__DEFAULT_REGION=de
       - ABR_APP__DEBUG=false
       #- ABR_APP__BASE_URL=/abr/
@@ -617,16 +618,16 @@ services:
     cap_add:
       - NET_ADMIN
     ports:
-      - 5076:5076 # NZBHydra2 over VPN
-      - 9696:9696 # Prowlarr over VPN
-      - 8191:8191 # Flaresolverr over VPN
-      - 9091:9091 # Transmission over VPN
-      - 51413:51413 # Transmission over VPN
-      - 51413:51413/udp # Transmission over VPN
-      - 8112:8112 # Deluge
-      - 6881:6881 # Deluge
-      - 6881:6881/udp # Deluge
-      - 58846:58846 #optional # Deluge
+      - 5076:5076 # NZBHydra2
+      - 9696:9696 # Prowlarr
+      - 8191:8191 # Flaresolverr
+      - 9091:9091 # Transmission Webinterface
+      - 51413:51413 # Transmission Inbound
+      - 51413:51413/udp # Transmission Inbound
+      - 8112:8112 # Deluge Webinterface
+      - 6881:6881 # Deluge Inbound
+      - 6881:6881/udp # Deluge Inbound
+      - 58846:58846 #optional # Deluge thin client
     devices:
       - /dev/net/tun
     volumes:
