@@ -201,7 +201,7 @@ services:
       - DELUGE_LOGLEVEL=error #optional
     volumes:
       - deluge_config:/config
-      - /scratch/downloads:/downloads
+      - /scratch/downloads:/data/downloads
       - data:/mnt/DATA
       - media:/mnt/MEDIA
     #Ports moved to vpn:
@@ -480,7 +480,7 @@ services:
     volumes:
       - qbittorrent_config:/config
       - qbittorrent_logs:/logs
-      - /scratch/downloads:/downloads
+      - /scratch/downloads:/data/downloads
       - data:/mnt/DATA
       - media:/mnt/MEDIA
     #Ports moved to vpn:
