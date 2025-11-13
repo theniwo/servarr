@@ -593,6 +593,7 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
+  # Used for MyAnonamouse
   seedboxapi:
     image: myanonamouse/seedboxapi
     network_mode: "service:vpn"  # use VPN
