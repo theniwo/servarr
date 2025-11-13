@@ -20,6 +20,7 @@ volumes:
   picard_config:
   prowlarr_config:
   qbittorrent_config:
+  qbittorrent_logs:
   radarr_config:
   readarr_config:
   recyclarr_config:
@@ -478,6 +479,7 @@ services:
       - TORRENTING_PORT=6882
     volumes:
       - qbittorrent_config:/config
+      - qbittorrent_logs:/logs
       - /scratch/download/torrent:/downloads
       - data:/mnt/DATA
       - media:/mnt/MEDIA
