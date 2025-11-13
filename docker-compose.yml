@@ -678,16 +678,16 @@ services:
       - 5076:5076 # NZBHydra2
       - 9696:9696 # Prowlarr
       - 8191:8191 # Flaresolverr
-      - 9091:9091 # Transmission Webinterface
-      - 51413:51413 # Transmission Inbound
-      - 51413:51413/udp # Transmission Inbound
+      #- 9091:9091 # Transmission Webinterface
+      #- 51413:51413 # Transmission Inbound
+      #- 51413:51413/udp # Transmission Inbound
       - 8081:8081 # QBittorrent Webinterface
-      - 6882:6882 # Deluge Inbound
-      - 6882:6882/udp # Deluge Inbound
-      - 8112:8112 # Deluge Webinterface
-      - 6881:6881 # Deluge Inbound
-      - 6881:6881/udp # Deluge Inbound
-      - 58846:58846 #optional # Deluge thin client
+      - 6882:6882 # QBittorrent Inbound
+      - 6882:6882/udp # QBittorrentInbound
+      #- 8112:8112 # Deluge Webinterface
+      #- 6881:6881 # Deluge Inbound
+      #- 6881:6881/udp # Deluge Inbound
+      #- 58846:58846 #optional # Deluge thin client
     devices:
       - /dev/net/tun
     volumes:
