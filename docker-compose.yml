@@ -100,7 +100,7 @@ services:
     image: prodrigestivill/postgres-backup-local
     #mem_limit: 512M
     restart: unless-stopped
-    user: postgres:abr
+    user: postgres:postgres
     volumes:
       - abr-db_backup:/backups
       #- abr-db_backup_sql:/var/lib/postgresql/data # seems outdated
