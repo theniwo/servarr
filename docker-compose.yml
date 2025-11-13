@@ -186,35 +186,35 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  deluge:
-    image: lscr.io/linuxserver/deluge:latest
-    user: 1000:1000
-    network_mode: "service:vpn"  # use VPN
-    depends_on:
-      vpn:
-        condition: service_healthy
-    env_file:
-      - ./global.env
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - DELUGE_LOGLEVEL=error #optional
-    volumes:
-      - deluge_config:/config
-      - /scratch/download/torrent:/downloads
-      - data:/mnt/DATA
-      - media:/mnt/MEDIA
-    #Ports moved to vpn:
-    #ports:
-      #- 8112:8112
-      #- 6881:6881
-      #- 6881:6881/udp
-      #- 58846:58846 #optional
-    restart: unless-stopped
-    healthcheck:
-      test: "exit 0"
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+#  deluge:
+#    image: lscr.io/linuxserver/deluge:latest
+#    user: 1000:1000
+#    network_mode: "service:vpn"  # use VPN
+#    depends_on:
+#      vpn:
+#        condition: service_healthy
+#    env_file:
+#      - ./global.env
+#    environment:
+#      - PUID=1000
+#      - PGID=1000
+#      - DELUGE_LOGLEVEL=error #optional
+#    volumes:
+#      - deluge_config:/config
+#      - /scratch/download/torrent:/downloads
+#      - data:/mnt/DATA
+#      - media:/mnt/MEDIA
+#    #Ports moved to vpn:
+#    #ports:
+#      #- 8112:8112
+#      #- 6881:6881
+#      #- 6881:6881/udp
+#      #- 58846:58846 #optional
+#    restart: unless-stopped
+#    healthcheck:
+#      test: "exit 0"
+#    labels:
+#      - "com.centurylinklabs.watchtower.enable=true"
 
   flaresolverr:
     # Used to bypass cloudflare captchas on 1337x
@@ -636,39 +636,39 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-  transmission:
-    image: lscr.io/linuxserver/transmission:latest
-    network_mode: "service:vpn"  # use VPN
-    depends_on:
-      vpn:
-        condition: service_healthy
-    env_file:
-      - ./global.env
-      - ./transmission.env
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TRANSMISSION_WEB_HOME= #optional
-      - WHITELIST= #optional
-      - PEERPORT= #optional
-      - HOST_WHITELIST= #optional
-      - DNS_KEEP_NAMESERVER=on
-      - DOT=off
-    volumes:
-      - transmission_config:/config
-      - /scratch/download:/scratch/download
-      - data:/mnt/DATA
-      - media:/mnt/MEDIA
-    #Ports moved to vpn:
-    #ports:
-      #- 9091:9091
-      #- 51413:51413
-      #- 51413:51413/udp
-    restart: unless-stopped
-    healthcheck:
-      test: "exit 0"
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+#  transmission:
+#    image: lscr.io/linuxserver/transmission:latest
+#    network_mode: "service:vpn"  # use VPN
+#    depends_on:
+#      vpn:
+#        condition: service_healthy
+#    env_file:
+#      - ./global.env
+#      - ./transmission.env
+#    environment:
+#      - PUID=1000
+#      - PGID=1000
+#      - TRANSMISSION_WEB_HOME= #optional
+#      - WHITELIST= #optional
+#      - PEERPORT= #optional
+#      - HOST_WHITELIST= #optional
+#      - DNS_KEEP_NAMESERVER=on
+#      - DOT=off
+#    volumes:
+#      - transmission_config:/config
+#      - /scratch/download:/scratch/download
+#      - data:/mnt/DATA
+#      - media:/mnt/MEDIA
+#    #Ports moved to vpn:
+#    #ports:
+#      #- 9091:9091
+#      #- 51413:51413
+#      #- 51413:51413/udp
+#    restart: unless-stopped
+#    healthcheck:
+#      test: "exit 0"
+#    labels:
+#      - "com.centurylinklabs.watchtower.enable=true"
 
   vpn:
     image: qmcgaw/gluetun
