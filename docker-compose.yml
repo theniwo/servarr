@@ -700,9 +700,11 @@ services:
       - VPN_SERVICE_PROVIDER=custom
       - OPENVPN_CUSTOM_CONFIG=/gluetun/myvpn.ovpn
       - VPN_BLOCK_OUTSIDE_DNS=true
-      - DNS_KEEP_NAMESERVER=on
-      - DOT=off
+      - DNS_KEEP_NAMESERVER=off
+      - DNS_UPSTREAM_RESOLVER_TYPE=dot
       - DNS=1.1.1.1
+      - DNS_ADRESS=1.1.1.1
+      #- DOT_PROVIDERS=quad9
       #- DNS=8.8.8.8,8.8.4.4
       #- PUID=1000
       #- PGID=1000
