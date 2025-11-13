@@ -778,8 +778,6 @@ services:
       - DOT_PROVIDERS=quad9
       - FIREWALL_VPN_INPUT_PORTS=6881,6882,51413
       - FIREWALL_INPUT_PORTS=6881,6882,51413
-      #- DNS=8.8.8.8,8.8.4.4
-      #- HTTP_CONTROL_SERVER_ADDRESS=:8181
       - HTTP_CONTROL_SERVER_LOG=off
     healthcheck:
       test: [ "CMD", "/gluetun-entrypoint", "healthcheck" ]
