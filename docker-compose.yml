@@ -782,9 +782,6 @@ services:
       #- PGID=1000
       #- HTTP_CONTROL_SERVER_ADDRESS=:8181
     healthcheck:
-      #test: "wget -qO - http://ipecho.net/plain || exit 1"
-      #test: ["CMD", "wget", "-q0", "http://ipecho.net/plain", ";", "echo", "||", "exit", "1" ]
-      #test: "ping -c1 www.google.com || exit 1"
       test: [ "CMD", "/gluetun-entrypoint", "healthcheck" ]
       start_period: 10s
       interval: 5s
