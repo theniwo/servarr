@@ -19,10 +19,12 @@ volumes:
   nzbhydra2_config:
   picard_config:
   prowlarr_config:
+  qbittorrent_config:
   radarr_config:
   readarr_config:
   recyclarr_config:
   sabnzbd_config:
+  seedboxapi_config:
   sonarr_config:
   transmission_config:
   vpn_config:
@@ -460,6 +462,36 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    user: 1000:1000
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      vpn:
+        condition: service_healthy
+    env_file:
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - WEBUI_PORT=8081
+      - TORRENTING_PORT=6882
+    volumes:
+      - qbittorrent_config:/config
+      - /scratch/download/torrent:/downloads
+      - data:/mnt/DATA
+      - media:/mnt/MEDIA
+    #Ports moved to vpn:
+    #ports:
+    #  - 8081:8081
+    #  - 6882:6882
+    #  - 6882:6882/udp
+    restart: unless-stopped
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
   radarr:
     image: lscr.io/linuxserver/radarr:latest
     env_file:
@@ -559,6 +591,30 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
+
+  seedboxapi:
+    image: myanonamouse/seedboxapi
+    network_mode: "service:vpn"  # use VPN
+    user: 1000:1000 # Run as a non-root user.
+    env_file:
+      - ./seedboxapi.env
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - DEBUG=1
+      - interval=1
+    volumes:
+      - seedboxapi_config:/config
+    restart: unless-stopped
+    depends_on:
+      vpn:
+        condition: service_healthy
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
     env_file:
@@ -624,6 +680,9 @@ services:
       - 9091:9091 # Transmission Webinterface
       - 51413:51413 # Transmission Inbound
       - 51413:51413/udp # Transmission Inbound
+      - 8081:8081 # QBittorrent Webinterface
+      - 6882:6882 # Deluge Inbound
+      - 6882:6882/udp # Deluge Inbound
       - 8112:8112 # Deluge Webinterface
       - 6881:6881 # Deluge Inbound
       - 6881:6881/udp # Deluge Inbound
