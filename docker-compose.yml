@@ -593,7 +593,6 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
-
   seedboxapi:
     image: myanonamouse/seedboxapi
     network_mode: "service:vpn"  # use VPN
@@ -604,7 +603,7 @@ services:
     environment:
       - PUID=1000
       - PGID=1000
-      - DEBUG=1
+      - DEBUG=
       - interval=1
     volumes:
       - seedboxapi_config:/config
