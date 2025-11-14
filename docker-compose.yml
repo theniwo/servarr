@@ -751,16 +751,16 @@ services:
       - 5076:5076 # NZBHydra2
       - 9696:9696 # Prowlarr
       - 8191:8191 # Flaresolverr
-      - 9091:9091 # Transmission Webinterface
-      - 52310:54310 # Transmission Inbound
-      - 52310:54310/udp # Transmission Inbound
       - 8081:8081 # QBittorrent Webinterface
+      - 8112:8112 # Deluge Webinterface
+      - 9091:9091 # Transmission Webinterface
       - 52308:54308 # QBittorrent Inbound
       - 52308:54308/udp # QBittorrentInbound
-      - 8112:8112 # Deluge Webinterface
       - 52309:54309 # Deluge Inbound
       - 52309:54309/udp # Deluge Inbound
-      - 58846:58846 #optional # Deluge thin client
+      - 52310:54310 # Transmission Inbound
+      - 52310:54310/udp # Transmission Inbound
+      #- 58846:58846 #optional # Deluge thin client
     devices:
       - /dev/net/tun
     volumes:
@@ -776,7 +776,7 @@ services:
       - VPN_BLOCK_OUTSIDE_DNS=true
       - DNS_KEEP_NAMESERVER=off # Highly recommended to leave off
       - DOT_PROVIDERS=quad9
-      - FIREWALL_INPUT_PORTS=52308,52309,52310
+      #- FIREWALL_INPUT_PORTS=52308,52309,52310
       - FIREWALL_VPN_INPUT_PORTS=52308,52309,52310
       - HTTP_CONTROL_SERVER_LOG=off
     healthcheck:
