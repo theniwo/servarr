@@ -662,6 +662,8 @@ services:
     image: tmmrtn/mousehole:latest
     user: 1000:1000 # Run as a non-root user.
     network_mode: "service:vpn"  # use VPN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     restart: unless-stopped
     env_file:
       - ./mamid.env
@@ -799,6 +801,8 @@ services:
     image: qmcgaw/gluetun
     cap_add:
       - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     ports:
       - 5010:5010 # Mousehole
       - 5076:5076 # NZBHydra2
@@ -831,19 +835,22 @@ services:
       - OPENVPN_CUSTOM_CONFIG=/gluetun/myvpn.ovpn
       - VPN_BLOCK_OUTSIDE_DNS=true
       - DNS_KEEP_NAMESERVER=off # Highly recommended to leave off
-      - DNS_UPSTREAM_RESOLVERS=quad9
-      - DNS_UPSTREAM_RESOLVER_TYPE=dot
-      - DOT_PROVIDERS=quad9
-      - FIREWALL_VPN_INPUT_PORTS=52308,52309,52310
-      #- FIREWALL_INPUT_PORTS=52308,52309,52310
+      - DOT=off
+      - DNS_UPSTREAM_RESOLVER_TYPE=plain
+      - DNS=1.1.1.1
+      #- DNS_UPSTREAM_RESOLVERS=quad9
+      #- DNS_UPSTREAM_RESOLVER_TYPE=dot
+      #- DOT_PROVIDERS=quad9
+      #- FIREWALL_VPN_INPUT_PORTS="52308,52309,52310"
       - BLOCK_SURVEILLANCE=on
       - HTTP_CONTROL_SERVER_LOG=off
+      - DNS_UPSTREAM_IPV6=off
     healthcheck:
       test: [ "CMD", "/gluetun-entrypoint", "healthcheck" ]
       start_period: 10s
       interval: 5s
       timeout: 5s
-      retries: 2
+      retries: 5
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
