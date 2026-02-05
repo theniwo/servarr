@@ -487,9 +487,9 @@ services:
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
     network_mode: "service:vpn"  # use VPN
-    depends_on:
-      vpn:
-        condition: service_healthy
+    #depends_on:
+      #vpn:
+        #condition: service_healthy
     env_file:
       - ./global.env
     environment:
@@ -500,8 +500,8 @@ services:
     volumes:
       - prowlarr_config:/config
     #Ports moved to vpn:
-    #ports:
-      #- 9696:9696
+    ports:
+      - 9696:9696
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -657,31 +657,31 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   # Used for MyAnonamouse
-#  mousehole:
-#    image: tmmrtn/mousehole:latest
-#    user: 1000:1000 # Run as a non-root user.
-#    network_mode: "service:vpn"  # use VPN
-#    sysctls:
-#      - net.ipv6.conf.all.disable_ipv6=1
-#    restart: unless-stopped
-#    env_file:
-#      - ./mamid.env
-#      - ./global.env
-#    environment:
-#      - PUID=1000
-#      - PGID=1000
-#    volumes:
-#      - mousehole_config:/srv/mousehole
-#    depends_on:
-#      vpn:
-#        condition: service_healthy
-#    healthcheck:
-#      test: [ "CMD-SHELL", "curl -fs http://localhost:5010/state || exit 1" ]
-#      interval: 60s
-#      timeout: 20s
-#      retries: 5
-#    labels:
-#      - "com.centurylinklabs.watchtower.enable=true"
+  mousehole:
+    image: tmmrtn/mousehole:latest
+    user: 1000:1000 # Run as a non-root user.
+    network_mode: "service:vpn"  # use VPN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
+    restart: unless-stopped
+    env_file:
+      - ./mamid.env
+      - ./global.env
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - mousehole_config:/srv/mousehole
+    depends_on:
+      vpn:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -fs http://localhost:5010/state || exit 1" ]
+      interval: 60s
+      timeout: 20s
+      retries: 5
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
 
   # Used for MyAnonamouse
 #  mamapi:
@@ -804,17 +804,17 @@ services:
       - net.ipv6.conf.all.disable_ipv6=1
     ports:
       #127.0.0.1:1337:8888 # Resilio
-      #- 5010:5010 # Mousehole
+      - 5010:5010 # Mousehole
       - 5076:5076 # NZBHydra2
-      - 9696:9696 # Prowlarr
+      #- 9696:9696 # Prowlarr
       - 8191:8191 # Flaresolverr
-      #- 8081:8081 # QBittorrent Webinterface
-      #- 8112:8112 # Deluge Webinterface
+      - 8081:8081 # QBittorrent Webinterface
+      - 8112:8112 # Deluge Webinterface
       - 9091:9091 # Transmission Webinterface
-      #- 52308:54308 # QBittorrent Inbound
-      #- 52308:54308/udp # QBittorrentInbound
-      #- 52309:54309 # Deluge Inbound
-      #- 52309:54309/udp # Deluge Inbound
+      - 52308:54308 # QBittorrent Inbound
+      - 52308:54308/udp # QBittorrentInbound
+      - 52309:54309 # Deluge Inbound
+      - 52309:54309/udp # Deluge Inbound
       - 52310:54310 # Transmission Inbound
       - 52310:54310/udp # Transmission Inbound
       #- 58846:58846 #optional # Deluge thin client
