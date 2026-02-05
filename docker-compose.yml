@@ -486,7 +486,7 @@ services:
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
-    network_mode: "service:vpn"  # use VPN
+    #network_mode: "service:vpn"  # use VPN
     #depends_on:
       #vpn:
         #condition: service_healthy
