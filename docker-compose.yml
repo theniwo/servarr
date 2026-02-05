@@ -802,7 +802,7 @@ services:
       - NET_ADMIN
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
-    ports:
+    #ports:
       #127.0.0.1:1337:8888 # Resilio
       #- 5010:5010 # Mousehole
       #- 5076:5076 # NZBHydra2
