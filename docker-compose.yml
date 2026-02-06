@@ -664,6 +664,8 @@ services:
     #depends_on:
       #vpn:
         #condition: service_healthy
+    ports:
+      - 5010:5010 # Mousehole
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     restart: unless-stopped
