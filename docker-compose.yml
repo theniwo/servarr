@@ -204,10 +204,10 @@ services:
   deluge:
     image: lscr.io/linuxserver/deluge:latest
     user: 1000:1000
-    #network_mode: "service:vpn"  # use VPN
-    #depends_on:
-      #vpn:
-        #condition: service_healthy
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
     environment:
@@ -220,11 +220,11 @@ services:
       - data:/mnt/DATA
       - media:/mnt/MEDIA
     #Ports moved to vpn:
-    ports:
-      - 8112:8112
-      - 6881:6881
-      - 6881:6881/udp
-      - 58846:58846 #optional
+    #ports:
+      #- 8112:8112
+      #- 6881:6881
+      #- 6881:6881/udp
+      #- 58846:58846 #optional
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -238,10 +238,10 @@ services:
     # Used to bypass cloudflare captchas on 1337x
     # DockerHub mirror flaresolverr/flaresolverr:latest
     image: ghcr.io/flaresolverr/flaresolverr:latest
-    #network_mode: "service:vpn"  # use VPN
-    #depends_on:
-      #vpn:
-        #condition: service_healthy
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
     environment:
@@ -249,8 +249,8 @@ services:
       - LOG_HTML=${LOG_HTML:-false}
       - CAPTCHA_SOLVER=${CAPTCHA_SOLVER:-none}
     #Ports moved to vpn:
-    ports:
-      - "${PORT:-8191}:8191"
+    #ports:
+      #- "${PORT:-8191}:8191"
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -444,10 +444,10 @@ services:
 
   nzbhydra2:
     image: lscr.io/linuxserver/nzbhydra2:latest
-    #network_mode: "service:vpn"  # use VPN
-    #depends_on:
-      #vpn:
-        #condition: service_healthy
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
     environment:
@@ -457,8 +457,8 @@ services:
       - nzbhydra2_config:/config
       - /scratch/downloads:/data/downloads
     #Ports moved to vpn:
-    ports:
-      - 5076:5076
+    #ports:
+      #- 5076:5076
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -486,10 +486,10 @@ services:
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
-    #network_mode: "service:vpn"  # use VPN
-    #depends_on:
-      #vpn:
-        #condition: service_healthy
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
     environment:
@@ -500,8 +500,8 @@ services:
     volumes:
       - prowlarr_config:/config
     #Ports moved to vpn:
-    ports:
-      - 9696:9696
+    #ports:
+      #- 9696:9696
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -763,10 +763,10 @@ services:
 
   transmission:
     image: lscr.io/linuxserver/transmission:latest
-    #network_mode: "service:vpn"  # use VPN
-    #depends_on:
-      #vpn:
-        #condition: service_healthy
+    network_mode: "service:vpn"  # use VPN
+    depends_on:
+      vpn:
+        condition: service_healthy
     env_file:
       - ./global.env
       - ./transmission.env
@@ -785,10 +785,10 @@ services:
       - data:/mnt/DATA
       - media:/mnt/MEDIA
     #Ports moved to vpn:
-    ports:
-      - 9091:9091
-      - 51413:51413
-      - 51413:51413/udp
+    #ports:
+      #- 9091:9091
+      #- 51413:51413
+      #- 51413:51413/udp
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -807,19 +807,19 @@ services:
     ports:
       #127.0.0.1:1337:8888 # Resilio
       - 5010:5010 # Mousehole
-      #- 5076:5076 # NZBHydra2
-      #- 9696:9696 # Prowlarr
-      #- 8191:8191 # Flaresolverr
+      - 5076:5076 # NZBHydra2
+      - 9696:9696 # Prowlarr
+      - 8191:8191 # Flaresolverr
       - 8081:8081 # QBittorrent Webinterface
-      #- 8112:8112 # Deluge Webinterface
-      #- 9091:9091 # Transmission Webinterface
+      - 8112:8112 # Deluge Webinterface
+      - 9091:9091 # Transmission Webinterface
       - 52308:54308 # QBittorrent Inbound
       - 52308:54308/udp # QBittorrentInbound
-      #- 52309:54309 # Deluge Inbound
-      #- 52309:54309/udp # Deluge Inbound
-      #- 52310:54310 # Transmission Inbound
-      #- 52310:54310/udp # Transmission Inbound
-      #- 58846:58846 #optional # Deluge thin client
+      - 52309:54309 # Deluge Inbound
+      - 52309:54309/udp # Deluge Inbound
+      - 52310:54310 # Transmission Inbound
+      - 52310:54310/udp # Transmission Inbound
+      - 58846:58846 #optional # Deluge thin client
     devices:
       - /dev/net/tun
     volumes:
@@ -833,6 +833,8 @@ services:
       #- VPN_SERVICE_PROVIDER=airvpn
       #- VPN_TYPE=wireguard
       #- SERVER_COUNTRIES=Netherlands
+      - OPENVPN_USER=ewiujzmrlp
+      - OPENVPN_PASSWORD=b/V8[6G5g/U0
       - VPN_SERVICE_PROVIDER=custom
       - OPENVPN_CUSTOM_CONFIG=/gluetun/myvpn.ovpn
       - VPN_BLOCK_OUTSIDE_DNS=true
