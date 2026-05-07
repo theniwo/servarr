@@ -1,12 +1,20 @@
 ---
+networks:
+  apprise-net:
+    external: true
+
 volumes:
-  abr_config:
-  abr-db_data:
   abr-db_backup:
+  abr-db_data:
+  abr_config:
   abs_config:
   abs_metadata:
+  #apprise_attach:
+  #apprise_config:
+  #apprise_plugin:
   bazarr_config:
   deluge_config:
+  jdownloader_config:
   jellyfin_cache:
   jellyfin_config:
   jellyseer_config:
@@ -47,8 +55,11 @@ volumes:
       remote: 'media:'
       allow_other: 'true'
       vfs_cache_mode: writes
-      vfs_cache_max_size: 20G
-      vfs_cache_max_age: 5m
+      vfs_cache_max_size: 30G
+      vfs_cache_max_age: 3m
+      dir_cache_time: 10s
+      poll_interval: 15s
+      attr_timeout: 1s
       # poll_interval: 0
 
 services:
@@ -79,7 +90,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   abr-db:
     env_file:
@@ -94,7 +107,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   abr-db_backup:
     image: prodrigestivill/postgres-backup-local
@@ -154,16 +169,23 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   abs:
     image: ghcr.io/advplyr/audiobookshelf:latest
+    restart: unless-stopped
+    networks:
+      - default
+      - apprise-net
     ports:
       - 13378:80
     volumes:
       - /mnt/MEDIA/AUDIO/Audiobooks:/mnt/audiobooks
       - /mnt/MEDIA/AUDIO/Podcasts:/mnt/podcasts
       - /mnt/MEDIA/AUDIO/Audioplays:/mnt/audioplays
+      - /mnt/MEDIA/LECTIO/E-Books:/mnt/E-Books
       - abs_config:/config
       - abs_metadata:/metadata
     env_file:
@@ -171,14 +193,51 @@ services:
     environment:
       - PUID=1000
       - PGID=1000
-    restart: unless-stopped
     healthcheck:
       test: "exit 0"
       interval: 60s
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
+
+#  apprise:
+#    image: caronc/apprise:latest
+#    user: "${PUID:-1000}:${PGID:-1000}"
+#    # Hardened runtime
+#    #read_only: true
+#    #security_opt:
+#      #- no-new-privileges:true
+#    #cap_drop:
+#      #- ALL
+#    ports:
+#      - "8337:8000"
+#    env_file:
+#      - ./global.env
+#    environment:
+#      APPRISE_STATEFUL_MODE: simple
+#      APPRISE_WORKER_COUNT: "1"
+#      APPRISE_ADMIN: "y"
+#    # Persistent state
+#    volumes:
+#      - apprise_config:/config
+#      - apprise_plugin:/plugin
+#      - apprise_attach:/attach
+#    # Ephemeral runtime and temp files
+#    #tmpfs:
+#      #- /tmp
+#    restart: unless-stopped
+#    healthcheck:
+#      test: "exit 0"
+#      interval: 60s
+#      timeout: 20s
+#      retries: 5
+#    labels:
+#      - "wud.watch=true"
+#      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
@@ -199,7 +258,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   deluge:
     image: lscr.io/linuxserver/deluge:latest
@@ -208,6 +269,8 @@ services:
     depends_on:
       vpn:
         condition: service_healthy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     env_file:
       - ./global.env
     environment:
@@ -232,7 +295,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   flaresolverr:
     # Used to bypass cloudflare captchas on 1337x
@@ -242,6 +307,8 @@ services:
     depends_on:
       vpn:
         condition: service_healthy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     env_file:
       - ./global.env
     environment:
@@ -258,7 +325,37 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
+
+  jdownloader:
+    image: jlesage/jdownloader-2
+    hostname: jdownloader
+    cap_add:
+      - SYS_NICE
+    env_file:
+      - ./global.env
+      - ./jdownloader.env
+    environment:
+      - WEB_AUTHENTICATION=1
+      - SECURE_CONNECTION=1
+      - WEB_FILE_MANAGER=1
+      - APP_NICENESS=10
+    networks:
+      - default
+      - apprise-net
+    ports:
+      - "5802:5800"
+    volumes:
+      - jdownloader_config:/config
+      - data:/mnt/data
+      - media:/mnt/media
+      - /scratch/downloads/complete/:/output:rw
+    labels:
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   jellyfin:
     image: jellyfin/jellyfin
@@ -269,6 +366,9 @@ services:
       - ./jellyfin.env
     # user: uid:gid
     # network_mode: 'host'
+    networks:
+      - default
+      - apprise-net
     ports:
       - 8096:8096
     volumes:
@@ -284,15 +384,15 @@ services:
       #   source: /mnt/MEDIA
       #   target: /media
     restart: 'unless-stopped'
-    extra_hosts:
-      - 'host.docker.internal:host-gateway'
     healthcheck:
       test: "exit 0"
       interval: 60s
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   jellyseerr:
     image: fallenbagel/jellyseerr:latest
@@ -301,6 +401,9 @@ services:
     environment:
       - LOG_LEVEL=info
       - PORT=5055 # optional
+    networks:
+      - default
+      - apprise-net
     ports:
       - 5055:5055
     volumes:
@@ -312,7 +415,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   jellystat:
     image: cyfershepard/jellystat:latest
@@ -322,6 +427,9 @@ services:
     environment:
       POSTGRES_IP: jellystat-db
       POSTGRES_PORT: 5432
+    networks:
+      - default
+      - apprise-net
     ports:
       - "3000:3000" #Server Port
     volumes:
@@ -336,7 +444,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   jellystat-db:
     env_file:
@@ -354,7 +464,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   jellystat-db_backup:
     image: prodrigestivill/postgres-backup-local
@@ -414,7 +526,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   lazylibrarian:
     image: lscr.io/linuxserver/lazylibrarian:latest
@@ -440,7 +554,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   nzbhydra2:
     image: lscr.io/linuxserver/nzbhydra2:latest
@@ -448,6 +564,8 @@ services:
     depends_on:
       vpn:
         condition: service_healthy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     env_file:
       - ./global.env
     environment:
@@ -466,7 +584,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   picard:
     image: mikenye/picard:latest
@@ -482,7 +602,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
@@ -490,6 +612,8 @@ services:
     depends_on:
       vpn:
         condition: service_healthy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     env_file:
       - ./global.env
     environment:
@@ -509,7 +633,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   qbittorrent:
     image: lscr.io/linuxserver/qbittorrent:latest
@@ -518,6 +644,8 @@ services:
     depends_on:
       vpn:
         condition: service_healthy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     env_file:
       - ./global.env
     environment:
@@ -543,7 +671,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   radarr:
     image: lscr.io/linuxserver/radarr:latest
@@ -557,6 +687,9 @@ services:
       - radarr_config:/config
       - data:/mnt/DATA
       - media:/mnt/MEDIA
+    networks:
+      - default
+      - apprise-net
     ports:
       - 7878:7878
     restart: unless-stopped
@@ -566,31 +699,35 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
-  readarr:
-    image: ghcr.io/hotio/readarr
-    env_file:
-      - ./global.env
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - UMASK=002
-    volumes:
-      - readarr_config:/config
-      - /scratch/downloads:/data/downloads
-      - media:/mnt/MEDIA
-    ports:
-      - "8787:8787"
-    restart: unless-stopped
-    healthcheck:
-      test: "exit 0"
-      interval: 60s
-      timeout: 20s
-      retries: 5
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
+  #readarr:
+    #image: ghcr.io/hotio/readarr
+    #env_file:
+      #- ./global.env
+    #environment:
+      #- PUID=1000
+      #- PGID=1000
+      #- UMASK=002
+    #volumes:
+      #- readarr_config:/config
+      #- /scratch/downloads:/data/downloads
+      #- media:/mnt/MEDIA
+    #ports:
+      #- "8787:8787"
+    #restart: unless-stopped
+    #healthcheck:
+      #test: "exit 0"
+      #interval: 60s
+      #timeout: 20s
+      #retries: 5
+    #labels:
+      #- "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
+#
   recyclarr:
     image: ghcr.io/recyclarr/recyclarr
     user: 1000:1000
@@ -605,7 +742,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   sabnzbd:
     image: lscr.io/linuxserver/sabnzbd:latest
@@ -620,6 +759,9 @@ services:
       - sabnzbd_config:/config
       - data:/mnt/DATA
       - media:/mnt/MEDIA
+    networks:
+      - default
+      - apprise-net
     ports:
       - 8080:8080
     restart: unless-stopped
@@ -629,7 +771,9 @@ services:
       timeout: 10s
       retries: 3
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   sab-watchdog:
     build: ./sab-watchdog
@@ -654,7 +798,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   # Used for MyAnonamouse
   mousehole:
@@ -664,10 +810,10 @@ services:
     depends_on:
       vpn:
         condition: service_healthy
-    #ports:
-      #- 5010:5010 # Mousehole
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
+    #ports:
+      #- 5010:5010 # Mousehole
     restart: unless-stopped
     env_file:
       - ./mamid.env
@@ -683,7 +829,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   # Used for MyAnonamouse
 #  mamapi:
@@ -709,7 +857,9 @@ services:
 #      timeout: 20s
 #      retries: 5
 #    labels:
-#      - "com.centurylinklabs.watchtower.enable=true"
+#      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   # Used for MyAnonamouse
 #  seedboxapi:
@@ -736,7 +886,9 @@ services:
 #      timeout: 20s
 #      retries: 5
 #    labels:
-#      - "com.centurylinklabs.watchtower.enable=true"
+#      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
@@ -750,6 +902,9 @@ services:
       - sonarr_config:/config
       - data:/mnt/DATA
       - media:/mnt/MEDIA
+    networks:
+      - default
+      - apprise-net
     ports:
       - 8989:8989
     restart: unless-stopped
@@ -759,7 +914,9 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   transmission:
     image: lscr.io/linuxserver/transmission:latest
@@ -767,6 +924,8 @@ services:
     depends_on:
       vpn:
         condition: service_healthy
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=1
     env_file:
       - ./global.env
       - ./transmission.env
@@ -796,7 +955,10 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
+      - "wud.watch.digest=true"
 
   vpn:
     image: qmcgaw/gluetun
@@ -804,6 +966,9 @@ services:
       - NET_ADMIN
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
+    networks:
+      - default
+      - apprise-net
     ports:
       #127.0.0.1:1337:8888 # Resilio
       - 5010:5010 # Mousehole
@@ -833,18 +998,17 @@ services:
       #- VPN_SERVICE_PROVIDER=airvpn
       #- VPN_TYPE=wireguard
       #- SERVER_COUNTRIES=Netherlands
-      - OPENVPN_USER=ewiujzmrlp
-      - OPENVPN_PASSWORD=b/V8[6G5g/U0
       - VPN_SERVICE_PROVIDER=custom
       - OPENVPN_CUSTOM_CONFIG=/gluetun/myvpn.ovpn
       - VPN_BLOCK_OUTSIDE_DNS=true
       - DNS_KEEP_NAMESERVER=off # Highly recommended to leave off
-      - DOT=off
-      - DNS_UPSTREAM_RESOLVER_TYPE=plain
-      - DNS=9.9.9.9
-      #- DNS_UPSTREAM_RESOLVERS=quad9
-      #- DNS_UPSTREAM_RESOLVER_TYPE=dot
-      #- DOT_PROVIDERS=quad9
+      #- DOT=off
+      #- DNS_UPSTREAM_RESOLVER_TYPE=plain
+      #- DNS=9.9.9.9
+      - DOT=on
+      - DNS_UPSTREAM_RESOLVERS=quad9
+      - DNS_UPSTREAM_RESOLVER_TYPE=dot
+      - DOT_PROVIDERS=quad9
       #- FIREWALL_VPN_INPUT_PORTS="52308,52309,52310"
       - BLOCK_SURVEILLANCE=on
       - HTTP_CONTROL_SERVER_LOG=off
@@ -856,7 +1020,9 @@ services:
       #timeout: 5s
       #retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
 
   #test:
     #image: nicolaka/netshoot
@@ -881,6 +1047,9 @@ services:
     volumes:
       - wizarr_database:/data/database
       - wizarr_steps:/data/wizard_steps
+    networks:
+      - default
+      - apprise-net
     ports:
       - 5690:5690
     healthcheck:
@@ -889,4 +1058,6 @@ services:
       timeout: 20s
       retries: 5
     labels:
-      - "com.centurylinklabs.watchtower.enable=true"
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
