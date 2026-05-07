@@ -9,9 +9,6 @@ volumes:
   abr_config:
   abs_config:
   abs_metadata:
-  #apprise_attach:
-  #apprise_config:
-  #apprise_plugin:
   bazarr_config:
   deluge_config:
   jdownloader_config:
@@ -82,7 +79,7 @@ services:
       - 13379:8000
     depends_on:
       abr-db:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -123,7 +120,7 @@ services:
       - abr-db
     depends_on:
       abr-db:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - ./abr-db.env
       - ./global.env
@@ -203,42 +200,6 @@ services:
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
 
-#  apprise:
-#    image: caronc/apprise:latest
-#    user: "${PUID:-1000}:${PGID:-1000}"
-#    # Hardened runtime
-#    #read_only: true
-#    #security_opt:
-#      #- no-new-privileges:true
-#    #cap_drop:
-#      #- ALL
-#    ports:
-#      - "8337:8000"
-#    env_file:
-#      - ./global.env
-#    environment:
-#      APPRISE_STATEFUL_MODE: simple
-#      APPRISE_WORKER_COUNT: "1"
-#      APPRISE_ADMIN: "y"
-#    # Persistent state
-#    volumes:
-#      - apprise_config:/config
-#      - apprise_plugin:/plugin
-#      - apprise_attach:/attach
-#    # Ephemeral runtime and temp files
-#    #tmpfs:
-#      #- /tmp
-#    restart: unless-stopped
-#    healthcheck:
-#      test: "exit 0"
-#      interval: 60s
-#      timeout: 20s
-#      retries: 5
-#    labels:
-#      - "wud.watch=true"
-#      - "wud.trigger.include=local"
-      - "wud.watch.digest=true"
-
   bazarr:
     image: lscr.io/linuxserver/bazarr:latest
     env_file:
@@ -268,7 +229,7 @@ services:
     network_mode: "service:vpn"  # use VPN
     depends_on:
       vpn:
-        condition: service_healthy
+        condition: service_started
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     env_file:
@@ -298,6 +259,7 @@ services:
       - "wud.watch=true"
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
+    profiles: ["downloader"]
 
   flaresolverr:
     # Used to bypass cloudflare captchas on 1337x
@@ -306,7 +268,7 @@ services:
     network_mode: "service:vpn"  # use VPN
     depends_on:
       vpn:
-        condition: service_healthy
+        condition: service_started
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     env_file:
@@ -328,6 +290,7 @@ services:
       - "wud.watch=true"
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
+    profiles: ["downloader"]
 
   jdownloader:
     image: jlesage/jdownloader-2
@@ -356,6 +319,7 @@ services:
       - "wud.watch=true"
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
+    profiles: ["downloader"]
 
   jellyfin:
     image: jellyfin/jellyfin
@@ -436,7 +400,7 @@ services:
       - jellystat_backup-data:/app/backend/backup-data
     depends_on:
       jellystat-db:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: "exit 0"
@@ -480,7 +444,7 @@ services:
       - jellystat-db
     depends_on:
       jellystat-db:
-        condition: service_healthy
+        condition: service_started
     env_file:
       - ./jellystat-db.env
       - ./global.env
@@ -563,7 +527,7 @@ services:
     network_mode: "service:vpn"  # use VPN
     depends_on:
       vpn:
-        condition: service_healthy
+        condition: service_started
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     env_file:
@@ -605,13 +569,14 @@ services:
       - "wud.watch=true"
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
+    profiles: ["editor"]
 
   prowlarr:
     image: lscr.io/linuxserver/prowlarr:latest
     network_mode: "service:vpn"  # use VPN
     depends_on:
       vpn:
-        condition: service_healthy
+        condition: service_started
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     env_file:
@@ -643,7 +608,7 @@ services:
     network_mode: "service:vpn"  # use VPN
     depends_on:
       vpn:
-        condition: service_healthy
+        condition: service_started
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     env_file:
@@ -674,6 +639,7 @@ services:
       - "wud.watch=true"
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
+    profiles: ["downloader"]
 
   radarr:
     image: lscr.io/linuxserver/radarr:latest
@@ -791,7 +757,7 @@ services:
       - DEBUG_MODE=false
     depends_on:
       sabnzbd:
-        condition: service_healthy
+        condition: service_started
     healthcheck:
       test: "exit 0"
       interval: 60s
@@ -809,7 +775,7 @@ services:
     network_mode: "service:vpn"  # use VPN
     depends_on:
       vpn:
-        condition: service_healthy
+        condition: service_started
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     #ports:
@@ -832,6 +798,7 @@ services:
       - "wud.watch=true"
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
+    profiles: ["downloader"]
 
   # Used for MyAnonamouse
 #  mamapi:
@@ -850,7 +817,7 @@ services:
 #    restart: unless-stopped
 #    depends_on:
 #      vpn:
-#        condition: service_healthy
+#        condition: service_started
 #    healthcheck:
 #      test: "exit 0"
 #      interval: 60s
@@ -858,8 +825,8 @@ services:
 #      retries: 5
 #    labels:
 #      - "wud.watch=true"
-      - "wud.trigger.include=local"
-      - "wud.watch.digest=true"
+#      - "wud.trigger.include=local"
+#      - "wud.watch.digest=true"
 
   # Used for MyAnonamouse
 #  seedboxapi:
@@ -879,7 +846,7 @@ services:
 #    restart: unless-stopped
 #    depends_on:
 #      vpn:
-#        condition: service_healthy
+#        condition: service_started
 #    healthcheck:
 #      test: "exit 0"
 #      interval: 60s
@@ -887,8 +854,8 @@ services:
 #      retries: 5
 #    labels:
 #      - "wud.watch=true"
-      - "wud.trigger.include=local"
-      - "wud.watch.digest=true"
+#      - "wud.trigger.include=local"
+#      - "wud.watch.digest=true"
 
   sonarr:
     image: lscr.io/linuxserver/sonarr:latest
@@ -923,7 +890,7 @@ services:
     network_mode: "service:vpn"  # use VPN
     depends_on:
       vpn:
-        condition: service_healthy
+        condition: service_started
     sysctls:
       - net.ipv6.conf.all.disable_ipv6=1
     env_file:
@@ -958,7 +925,7 @@ services:
       - "wud.watch=true"
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
-      - "wud.watch.digest=true"
+    profiles: ["downloader"]
 
   vpn:
     image: qmcgaw/gluetun
@@ -1029,7 +996,7 @@ services:
     #network_mode: "service:vpn"  # use VPN
     #depends_on:
       #vpn:
-        #condition: service_healthy
+        #condition: service_started
     #restart: unless-stopped
     #command: "nc -l -p 52309"
 
