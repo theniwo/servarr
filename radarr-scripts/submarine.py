@@ -6,9 +6,7 @@ from pathlib import Path
 import os
 from dotenv import load_dotenv
 
-# lädt .env aus dem gleichen Verzeichnis wie das Script
 load_dotenv()
-
 API_KEY = os.getenv("RADARR_API_KEY")
 
 RADARR_URL = os.getenv("RADARR_URL")
@@ -28,14 +26,17 @@ def get_tag_id():
     return None
 
 
+# 👉 nur EINMAL beim Start laden
+TAG_ID = get_tag_id()
+
+
 def process_movie(movie_id):
     movie = requests.get(
         f"{RADARR_URL}/api/v3/movie/{movie_id}",
         headers={"X-Api-Key": API_KEY}
     ).json()
 
-    tag_id = get_tag_id()
-    if not tag_id or tag_id not in movie.get("tags", []):
+    if not TAG_ID or TAG_ID not in movie.get("tags", []):
         return
 
     nfo_file = Path(movie["path"]) / "movie.nfo"
