@@ -164,14 +164,16 @@ def get_or_create_collection(name):
 
 
 # -----------------------------
-# ADD MOVIE TO COLLECTION
+# ADD MOVIE TO COLLECTION (FIXED API ROUTE)
 # -----------------------------
 def add_movie_to_collection(collection_id, movie_id):
     try:
+        # Jellyfin expects the item IDs as a comma-separated query parameter string,
+        # and the route is just '/Items', not '/Items/Add'.
         res = requests.post(
-            f"{JELLYFIN_URL}/Collections/{collection_id}/Items/Add",
+            f"{JELLYFIN_URL}/Collections/{collection_id}/Items",
             headers=jellyfin_headers(),
-            json={"Ids": [movie_id]},
+            params={"Ids": movie_id},
             timeout=10
         )
         print(f"[JELLYFIN ADD] {res.status_code} {res.text}")
@@ -179,7 +181,6 @@ def add_movie_to_collection(collection_id, movie_id):
     except Exception as e:
         print("Add to collection error:", str(e))
         return False
-
 
 # -----------------------------
 # CORE LOGIC
