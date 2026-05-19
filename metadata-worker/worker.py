@@ -57,32 +57,73 @@ def get_radarr_tags():
 
 
 # -----------------------------
-# FIND MOVIE IN JELLYFIN
+# JELLYFIN MAP BUILDERS (FIXED & OPTIMIZED)
 # -----------------------------
-def find_jellyfin_movie(movie_path):
-    res = requests.get(
-        f"{JELLYFIN_URL}/Items",
-        headers=jellyfin_headers(),
-        params={
-            "Recursive": "true",
-            "IncludeItemTypes": "Movie",
-            "Fields": "Path"
-        },
-        timeout=20
-    )
+def build_jellyfin_maps(search_term=None):
+    """
+    Fetches movies from Jellyfin and builds lookup maps for fast matching.
+    If search_term is provided, it narrows down the scope (used for single webhooks).
+    """
+    params = {
+        "Recursive": "true",
+        "IncludeItemTypes": "Movie",
+        "Fields": "Path,ProviderIds"
+    }
+    if search_term:
+        params["SearchTerm"] = search_term
 
-    if res.status_code != 200:
-        print("Jellyfin error:", res.text)
-        return None
+    try:
+        res = requests.get(
+            f"{JELLYFIN_URL}/Items",
+            headers=jellyfin_headers(),
+            params=params,
+            timeout=30
+        )
+        res.raise_for_status()
+    except Exception as e:
+        print(f"Failed to fetch items from Jellyfin: {e}")
+        return {"tmdb": {}, "imdb": {}, "folder": {}}
 
-    norm_path = os.path.normpath(movie_path or "")
+    tmdb_map = {}
+    imdb_map = {}
+    folder_map = {}
 
     for item in res.json().get("Items", []):
-        if not item.get("Path"):
-            continue
+        j_id = item.get("Id")
+        p_ids = item.get("ProviderIds", {})
+        path = item.get("Path")
 
-        if os.path.normpath(item["Path"]).startswith(norm_path):
-            return item["Id"]
+        if "Tmdb" in p_ids:
+            tmdb_map[str(p_ids["Tmdb"])] = j_id
+        if "Imdb" in p_ids:
+            imdb_map[str(p_ids["Imdb"])] = j_id
+
+        if path:
+            # Fallback: Match by the directory leaf name (e.g., "American Beauty (1999)")
+            folder_name = os.path.basename(os.path.dirname(path)).lower()
+            folder_map[folder_name] = j_id
+
+    return {"tmdb": tmdb_map, "imdb": imdb_map, "folder": folder_map}
+
+
+def match_movie_to_jellyfin(movie, maps):
+    """Matches a Radarr movie object against pre-built Jellyfin maps."""
+    # 1. Try matching by TMDB ID
+    tmdb_id = str(movie.get("tmdbId") or "")
+    if tmdb_id and tmdb_id in maps["tmdb"]:
+        return maps["tmdb"][tmdb_id]
+
+    # 2. Try matching by IMDb ID
+    imdb_id = str(movie.get("imdbId") or "")
+    if imdb_id and imdb_id in maps["imdb"]:
+        return maps["imdb"][imdb_id]
+
+    # 3. Try matching by folder base name (handles different Docker mount roots)
+    movie_path = movie.get("folderName") or movie.get("path") or ""
+    if movie_path:
+        folder_name = os.path.basename(os.path.normpath(movie_path)).lower()
+        if folder_name in maps["folder"]:
+            return maps["folder"][folder_name]
 
     return None
 
@@ -91,7 +132,6 @@ def find_jellyfin_movie(movie_path):
 # GET OR CREATE COLLECTION
 # -----------------------------
 def get_or_create_collection(name):
-    # search
     res = requests.get(
         f"{JELLYFIN_URL}/Items",
         headers=jellyfin_headers(),
@@ -108,16 +148,11 @@ def get_or_create_collection(name):
             if item["Name"].lower() == name.lower():
                 return item["Id"]
 
-    # create
     print(f"Creating collection: {name}")
-
     res = requests.post(
         f"{JELLYFIN_URL}/Collections",
         headers=jellyfin_headers(),
-        json={
-            "Name": name,
-            "IsLocked": False
-        },
+        json={"Name": name, "IsLocked": False},
         timeout=10
     )
 
@@ -129,7 +164,7 @@ def get_or_create_collection(name):
 
 
 # -----------------------------
-# ADD MOVIE TO COLLECTION (FIXED)
+# ADD MOVIE TO COLLECTION
 # -----------------------------
 def add_movie_to_collection(collection_id, movie_id):
     try:
@@ -139,47 +174,17 @@ def add_movie_to_collection(collection_id, movie_id):
             json={"Ids": [movie_id]},
             timeout=10
         )
-
         print(f"[JELLYFIN ADD] {res.status_code} {res.text}")
-
         return res.status_code in [200, 204]
-
     except Exception as e:
         print("Add to collection error:", str(e))
         return False
 
 
 # -----------------------------
-# OPTIONAL: SET COLLECTION POSTER (HOOK)
-# -----------------------------
-def set_collection_poster(collection_id, image_url=None):
-    """
-    Optional hook.
-    You can later plug TMDB or Radarr artwork here.
-    """
-    if not image_url:
-        return
-
-    try:
-        res = requests.post(
-            f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
-            headers=jellyfin_headers(),
-            json={"ImageUrl": image_url},
-            timeout=10
-        )
-
-        print(f"[POSTER] {res.status_code} {res.text}")
-
-    except Exception as e:
-        print("Poster error:", str(e))
-
-
-# -----------------------------
 # CORE LOGIC
 # -----------------------------
-def process_movie(movie):
-    radarr_tags = get_radarr_tags()
-
+def process_movie(movie, radarr_tags, jellyfin_maps):
     tag_names = [
         radarr_tags[t].lower().strip()
         for t in movie.get("tags", [])
@@ -192,8 +197,7 @@ def process_movie(movie):
         if t in collection_map
     ]
 
-    movie_path = movie.get("folderName") or movie.get("path")
-    movie_id = find_jellyfin_movie(movie_path)
+    movie_id = match_movie_to_jellyfin(movie, jellyfin_maps)
 
     result = {
         "movie": movie.get("title"),
@@ -207,12 +211,10 @@ def process_movie(movie):
 
     for collection_name in collections:
         collection_id = get_or_create_collection(collection_name)
-
         if not collection_id:
             continue
 
         ok = add_movie_to_collection(collection_id, movie_id)
-
         if ok:
             result["collections"].append(collection_name)
 
@@ -220,11 +222,10 @@ def process_movie(movie):
 
 
 # -----------------------------
-# RADARR WEBHOOK
+# RADARR WEBHOOK (CHANGED TO SYNC 'def')
 # -----------------------------
 @app.post("/radarr")
-async def radarr_webhook(request: Request):
-    payload = await request.json()
+def radarr_webhook(payload: dict):
     event = payload.get("eventType")
 
     if event == "Test":
@@ -234,29 +235,37 @@ async def radarr_webhook(request: Request):
     if not movie:
         return {"status": "ignored"}
 
+    # Optimization: Build small targeted map for this specific movie title
+    radarr_tags = get_radarr_tags()
+    jellyfin_maps = build_jellyfin_maps(search_term=movie.get("title"))
+
     return {
         "status": "ok",
-        "processed": process_movie(movie)
+        "processed": process_movie(movie, radarr_tags, jellyfin_maps)
     }
 
 
 # -----------------------------
-# FULLSCAN
+# FULLSCAN (CHANGED TO SYNC 'def')
 # -----------------------------
 @app.post("/fullscan")
-async def fullscan():
+def fullscan():
+    print("Starting full scan...")
+
+    # Pre-fetch and cache everything once
+    radarr_tags = get_radarr_tags()
+    jellyfin_maps = build_jellyfin_maps()
+
     res = requests.get(
         f"{RADARR_URL}/api/v3/movie",
         headers={"X-Api-Key": RADARR_KEY},
         timeout=20
     )
-
     res.raise_for_status()
 
     processed = []
-
     for movie in res.json():
-        processed.append(process_movie(movie))
+        processed.append(process_movie(movie, radarr_tags, jellyfin_maps))
 
     return {
         "status": "ok",
