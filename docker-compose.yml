@@ -10,6 +10,12 @@ volumes:
   abs_config:
   abs_metadata:
   bazarr_config:
+  cwa_config:
+  komga_config:
+  cwa_plugins:
+  calibre_config:
+  calibre_db:
+  calibre_web_config:
   deluge_config:
   jdownloader_config:
   jellyfin_cache:
@@ -21,6 +27,7 @@ volumes:
   jellystat_postgres-data:
   lazylibrarian_config:
   lidarr_config:
+  livrarr_config:
   mousehole_config:
   nzbhydra2_config:
   picard_config:
@@ -58,8 +65,119 @@ volumes:
       poll_interval: 15s
       attr_timeout: 1s
       # poll_interval: 0
+  media_audio:
+    driver: rclone
+    driver_opts:
+      remote: 'media:AUDIO'
+      allow_other: 'true'
+      vfs_cache_mode: writes
+      vfs_cache_max_size: 30G
+      vfs_cache_max_age: 3m
+      dir_cache_time: 10s
+      poll_interval: 15s
+      attr_timeout: 1s
+      # poll_interval: 0
+  media_lectio:
+    driver: rclone
+    driver_opts:
+      remote: 'media:LECTIO'
+      allow_other: 'true'
+      vfs_cache_mode: writes
+      vfs_cache_max_size: 30G
+      vfs_cache_max_age: 3m
+      dir_cache_time: 10s
+      poll_interval: 15s
+      attr_timeout: 1s
+      # poll_interval: 0
 
 services:
+  livrarr:
+    image: ghcr.io/kkodecs/livrarr:0.1.0-alpha4
+    restart: unless-stopped
+    ports:
+      - 8798:8789
+    volumes:
+      - livrarr_config:/config
+      #- /scratch/downloads/complete:/data/downloads/complete
+      - /scratch/downloads:/data/downloads
+      - media_lectio:/mnt/MEDIA/LECTIO
+      - media_audio:/mnt/MEDIA/AUDIO
+    profiles:
+      - books
+
+  komga:
+    image: ghcr.io/gotson/komga
+    restart: unless-stopped
+    env_file:
+      - ./global.env
+    volumes:
+      - komga_config:/config
+      - media_lectio:/mnt/MEDIA/LECTIO
+    ports:
+      - 25600:25600
+    user: "1000:1000"
+    profiles:
+      - books
+
+  cwa:
+    image: crocodilestick/calibre-web-automated:latest
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      # If your library is on a network share (e.g., NFS/SMB), disable WAL to reduce locking issues
+      # Accepts: true/false (default: false)
+      - NETWORK_SHARE_MODE=false
+      # Override the default port (8083) for the web server.
+      # Accepts any valid port number.
+      - CWA_PORT_OVERRIDE=8083
+    env_file:
+      - ./global.env
+      - ./cwa.env
+    volumes:
+      - cwa_config:/config
+      - cwa_plugins:/config/.config/calibre/plugins
+      - /scratch/ingest:/cwa-book-ingest
+      - media_lectio:/calibre-library
+    ports:
+      - 8083:8083
+    profiles:
+      - books
+
+  calibre:
+    image: lscr.io/linuxserver/calibre:latest
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+    env_file:
+      - ./global.env
+    volumes:
+      - calibre_db:/db
+      - calibre_config:/config
+      - media_lectio:/mnt/MEDIA/LECTIO
+    ports:
+      - 8084:8181
+    profiles:
+      - calibre
+
+  calibre-web:
+    image: linuxserver/calibre-web:latest
+    restart: unless-stopped
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - DOCKER_MODS=linuxserver/mods:universal-calibre
+    env_file:
+      - ./global.env
+    volumes:
+      - calibre_web_config:/config
+      - media_lectio:/mnt/MEDIA/LECTIO
+    ports:
+      - 8084:8083
+    profiles:
+      - calibre
+
   abr:
     image: markbeep/audiobookrequest:1
     env_file:
@@ -649,6 +767,7 @@ services:
       - PUID=1000
       - PGID=1000
     volumes:
+      - ./radarr-scripts:/scripts
       - /scratch/downloads:/data/downloads
       - radarr_config:/config
       - data:/mnt/DATA
@@ -668,6 +787,21 @@ services:
       - "wud.watch=true"
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
+
+  metadata-worker:
+    build: ./metadata-worker
+    #container_name: metadata-worker
+    working_dir: /app
+    volumes:
+      - ./metadata-worker:/app
+      - /mnt/MEDIA/VIDEO/Movies:/movies
+    environment:
+      - PYTHONUNBUFFERED=1
+    env_file:
+      - ./global.env
+      - ./worker.env
+    ports:
+      - "8787:8787"
 
   #readarr:
     #image: ghcr.io/hotio/readarr
@@ -691,9 +825,9 @@ services:
       #retries: 5
     #labels:
       #- "wud.watch=true"
-      - "wud.trigger.include=local"
-      - "wud.watch.digest=true"
-#
+      #- "wud.trigger.include=local"
+      #- "wud.watch.digest=true"
+
   recyclarr:
     image: ghcr.io/recyclarr/recyclarr
     user: 1000:1000
