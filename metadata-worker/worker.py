@@ -359,17 +359,26 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
 
 
 # -----------------------------
-# JELLYFIN WEBHOOK
+# JELLYFIN WEBHOOK (FIXED RAW PARSING)
 # -----------------------------
 @app.post("/jellyfin")
-def jellyfin_webhook(request: Request, payload: dict = None):
-    if payload is None:
-        try:
-            body = asyncio.run(request.body())
-            payload = json.loads(body.decode("utf-8"))
-        except Exception as e:
-            print(f"[JELLYFIN ERROR] Failed to parse raw payload: {e}")
-            return {"status": "error", "message": "Invalid JSON payload"}
+async def jellyfin_webhook(request: Request):
+    """Handles Jellyfin webhooks by reading the raw body to prevent 422 parsing errors."""
+    try:
+        # Read raw bytes and decode to string
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8").strip()
+
+        if not body_str:
+            print("[JELLYFIN ERROR] Received empty body")
+            return {"status": "error", "message": "Empty body"}
+
+        # Parse the string manually into a dictionary
+        payload = json.loads(body_str)
+
+    except Exception as e:
+        print(f"[JELLYFIN ERROR] Failed to parse raw payload: {e}")
+        return {"status": "error", "message": "Invalid JSON format"}
 
     event = payload.get("Event")
 
@@ -430,7 +439,6 @@ def jellyfin_webhook(request: Request, payload: dict = None):
     except Exception as e:
         print(f"Error processing Jellyfin webhook: {e}")
         return {"status": "error", "message": str(e)}
-
 
 # -----------------------------
 # RADARR WEBHOOK (FALLBACK)
