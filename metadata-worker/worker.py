@@ -4,6 +4,7 @@ import io
 import requests
 import asyncio
 import json
+import base64
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
 from PIL import Image as PILImage
@@ -224,10 +225,10 @@ def add_movie_to_collection(collection_id, movie_id, movie_title, collection_nam
 
 
 # -----------------------------
-# GENERATE GRID COVER (COLLAGE)
+# GENERATE GRID COVER (COLLAGE - FIXED)
 # -----------------------------
 def generate_collection_collage(collection_id, collection_name):
-    """Fetches movies from the collection, builds a 2x2 grid, and uploads it to Jellyfin."""
+    """Fetches movies from the collection, builds a 2x2 grid, and uploads it via Base64."""
     try:
         res = requests.get(
             f"{JELLYFIN_URL}/Items",
@@ -286,24 +287,26 @@ def generate_collection_collage(collection_id, collection_name):
         canvas.save(img_byte_arr, format='JPEG', quality=90)
         img_byte_arr.seek(0)
 
-        # Upload the generated poster back to the collection endpoint
+        # Encode binary data to Base64 string
+        base64_encoded = base64.b64encode(img_byte_arr.read()).decode("utf-8")
+
+        # Jellyfin expects a POST to /Images/Primary with the API Key also in the URL parameters
+        # to guarantee authentication for multi-part/string payloads.
         upload_res = requests.post(
             f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
-            headers={
-                "X-Emby-Token": JELLYFIN_KEY,
-                "Content-Type": "image/jpeg"
-            },
-            data=img_byte_arr.read(),
+            headers=jellyfin_headers(),
+            params={"api_key": JELLYFIN_KEY},  # <-- Fix: Authenticate via URL parameter for image route
+            data=base64_encoded,                # <-- Fix: Send as plain Base64 string payload
             timeout=15
         )
+
         if upload_res.status_code in [200, 204]:
             print(f"[POSTER] Successfully updated grid cover for collection '{collection_name}'")
         else:
-            print(f"[POSTER ERROR] Failed to upload collage: {upload_res.text}")
+            print(f"[POSTER ERROR] Failed to upload collage: (Status: {upload_res.status_code}) - {upload_res.text}")
 
     except Exception as e:
         print(f"[POSTER ERROR] Failed to create collage for {collection_name}: {e}")
-
 
 # -----------------------------
 # CORE LOGIC
