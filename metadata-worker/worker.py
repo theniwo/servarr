@@ -1,9 +1,12 @@
 import os
 import re
-import time
+import io
 import requests
+import asyncio
+import json
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
+from PIL import Image as PILImage
 
 load_dotenv()
 
@@ -159,10 +162,9 @@ def match_movie_to_jellyfin(movie, maps):
 
 
 # -----------------------------
-# GET OR CREATE COLLECTION (FIXED)
+# GET OR CREATE COLLECTION
 # -----------------------------
 def get_or_create_collection(name):
-    # 1. Check if collection already exists
     res = requests.get(
         f"{JELLYFIN_URL}/Items",
         headers=jellyfin_headers(),
@@ -179,14 +181,11 @@ def get_or_create_collection(name):
             if item["Name"].lower() == name.lower():
                 return item["Id"]
 
-    # 2. Create collection if not found
     print(f"Creating collection: {name}")
-
-    # Jellyfin expects 'Name' as a query parameter, not inside the JSON body
     res = requests.post(
         f"{JELLYFIN_URL}/Collections",
         headers=jellyfin_headers(),
-        params={"Name": name},  # <-- Fix: Moved from json= to params=
+        params={"Name": name},
         timeout=10
     )
 
@@ -194,12 +193,9 @@ def get_or_create_collection(name):
         print(f"Failed to create collection: (Status: {res.status_code}) - {res.text}")
         return None
 
-    # Jellyfin returns the created collection item as JSON
     try:
         return res.json().get("Id")
     except Exception:
-        # Fallback if API response structure differs slightly
-        print("[JELLYFIN] Collection created but ID could not be parsed immediately.")
         return None
 
 
@@ -225,6 +221,88 @@ def add_movie_to_collection(collection_id, movie_id, movie_title, collection_nam
     except Exception as e:
         print(f"Add to collection error for \"{movie_title}\" / \"{collection_name}\":", str(e))
         return False
+
+
+# -----------------------------
+# GENERATE GRID COVER (COLLAGE)
+# -----------------------------
+def generate_collection_collage(collection_id, collection_name):
+    """Fetches movies from the collection, builds a 2x2 grid, and uploads it to Jellyfin."""
+    try:
+        res = requests.get(
+            f"{JELLYFIN_URL}/Items",
+            headers=jellyfin_headers(),
+            params={
+                "ParentId": collection_id,
+                "Recursive": "true",
+                "IncludeItemTypes": "Movie",
+                "Fields": "PrimaryImageTag"
+            },
+            timeout=10
+        )
+        res.raise_for_status()
+        items = res.json().get("Items", [])
+
+        if len(items) < 2:
+            print(f"[POSTER] Not enough movies ({len(items)}) in '{collection_name}' for a collage yet.")
+            return
+
+        # Use up to 4 movies for a clean 2x2 grid
+        movies_to_use = items[:4]
+        images = []
+
+        for movie in movies_to_use:
+            m_id = movie["Id"]
+            img_res = requests.get(f"{JELLYFIN_URL}/Items/{m_id}/Images/Primary", timeout=10)
+            if img_res.status_code == 200:
+                try:
+                    images.append(PILImage.open(io.BytesIO(img_res.content)))
+                except Exception as img_err:
+                    print(f"[POSTER WARNING] Skipping broken image for item {m_id}: {img_err}")
+
+        if not images:
+            return
+
+        # Standard Jellyfin movie poster aspect ratio (approx. 2:3)
+        poster_w, poster_h = 400, 600
+        resized_images = [img.resize((poster_w, poster_h), PILImage.Resampling.LANCZOS) for img in images]
+
+        # Assemble the canvas grid based on available image count
+        if len(resized_images) >= 4:
+            # 2x2 Grid
+            canvas = PILImage.new("RGB", (poster_w * 2, poster_h * 2))
+            canvas.paste(resized_images[0], (0, 0))
+            canvas.paste(resized_images[1], (poster_w, 0))
+            canvas.paste(resized_images[2], (0, poster_h))
+            canvas.paste(resized_images[3], (poster_w, poster_h))
+        else:
+            # 2x1 Grid (Side-by-side fallback)
+            canvas = PILImage.new("RGB", (poster_w * 2, poster_h))
+            canvas.paste(resized_images[0], (0, 0))
+            canvas.paste(resized_images[1], (poster_w, 0))
+
+        # Save image to a memory stream buffer
+        img_byte_arr = io.BytesIO()
+        canvas.save(img_byte_arr, format='JPEG', quality=90)
+        img_byte_arr.seek(0)
+
+        # Upload the generated poster back to the collection endpoint
+        upload_res = requests.post(
+            f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
+            headers={
+                "X-Emby-Token": JELLYFIN_KEY,
+                "Content-Type": "image/jpeg"
+            },
+            data=img_byte_arr.read(),
+            timeout=15
+        )
+        if upload_res.status_code in [200, 204]:
+            print(f"[POSTER] Successfully updated grid cover for collection '{collection_name}'")
+        else:
+            print(f"[POSTER ERROR] Failed to upload collage: {upload_res.text}")
+
+    except Exception as e:
+        print(f"[POSTER ERROR] Failed to create collage for {collection_name}: {e}")
 
 
 # -----------------------------
@@ -264,21 +342,19 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
         ok = add_movie_to_collection(collection_id, movie_id, movie_title, collection_name)
         if ok:
             result["collections"].append(collection_name)
+            # Generate or update the grid cover artwork
+            generate_collection_collage(collection_id, collection_name)
 
     return result
 
 
 # -----------------------------
-# JELLYFIN WEBHOOK (FIXED)
+# JELLYFIN WEBHOOK
 # -----------------------------
 @app.post("/jellyfin")
 def jellyfin_webhook(request: Request, payload: dict = None):
-    # Fallback if FastAPI validation failed due to broken JSON structure
     if payload is None:
         try:
-            import json
-            # Read raw body safely
-            import asyncio
             body = asyncio.run(request.body())
             payload = json.loads(body.decode("utf-8"))
         except Exception as e:
@@ -287,7 +363,6 @@ def jellyfin_webhook(request: Request, payload: dict = None):
 
     event = payload.get("Event")
 
-    # Filter out raw template strings or wrong events
     if not event or "NotificationType" in event or event != "ItemAdded":
         return {"status": "ignored", "event": event}
 
@@ -301,7 +376,6 @@ def jellyfin_webhook(request: Request, payload: dict = None):
     print(f"[JELLYFIN WEBHOOK] New movie added to library: {movie_title}")
 
     try:
-        # Fetch Radarr movies to get tags
         res = requests.get(
             f"{RADARR_URL}/api/v3/movie",
             headers={"X-Api-Key": RADARR_KEY},
@@ -312,7 +386,6 @@ def jellyfin_webhook(request: Request, payload: dict = None):
         radarr_movie = None
         provider_ids = payload.get("ProviderIds") or {}
 
-        # Clean helper: treat raw template variables as empty string
         def clean_id(val):
             if not val or "ProviderIds" in str(val):
                 return ""
@@ -347,6 +420,7 @@ def jellyfin_webhook(request: Request, payload: dict = None):
     except Exception as e:
         print(f"Error processing Jellyfin webhook: {e}")
         return {"status": "error", "message": str(e)}
+
 
 # -----------------------------
 # RADARR WEBHOOK (FALLBACK)
