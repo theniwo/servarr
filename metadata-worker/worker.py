@@ -159,9 +159,10 @@ def match_movie_to_jellyfin(movie, maps):
 
 
 # -----------------------------
-# GET OR CREATE COLLECTION
+# GET OR CREATE COLLECTION (FIXED)
 # -----------------------------
 def get_or_create_collection(name):
+    # 1. Check if collection already exists
     res = requests.get(
         f"{JELLYFIN_URL}/Items",
         headers=jellyfin_headers(),
@@ -178,19 +179,28 @@ def get_or_create_collection(name):
             if item["Name"].lower() == name.lower():
                 return item["Id"]
 
+    # 2. Create collection if not found
     print(f"Creating collection: {name}")
+
+    # Jellyfin expects 'Name' as a query parameter, not inside the JSON body
     res = requests.post(
         f"{JELLYFIN_URL}/Collections",
         headers=jellyfin_headers(),
-        json={"Name": name, "IsLocked": False},
+        params={"Name": name},  # <-- Fix: Moved from json= to params=
         timeout=10
     )
 
     if res.status_code not in [200, 201]:
-        print("Failed to create collection:", res.text)
+        print(f"Failed to create collection: (Status: {res.status_code}) - {res.text}")
         return None
 
-    return res.json().get("Id")
+    # Jellyfin returns the created collection item as JSON
+    try:
+        return res.json().get("Id")
+    except Exception:
+        # Fallback if API response structure differs slightly
+        print("[JELLYFIN] Collection created but ID could not be parsed immediately.")
+        return None
 
 
 # -----------------------------
