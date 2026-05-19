@@ -259,19 +259,35 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
 
 
 # -----------------------------
-# JELLYFIN WEBHOOK (NEW)
+# JELLYFIN WEBHOOK (FIXED)
 # -----------------------------
 @app.post("/jellyfin")
-def jellyfin_webhook(payload: dict):
+def jellyfin_webhook(request: Request, payload: dict = None):
+    # Fallback if FastAPI validation failed due to broken JSON structure
+    if payload is None:
+        try:
+            import json
+            # Read raw body safely
+            import asyncio
+            body = asyncio.run(request.body())
+            payload = json.loads(body.decode("utf-8"))
+        except Exception as e:
+            print(f"[JELLYFIN ERROR] Failed to parse raw payload: {e}")
+            return {"status": "error", "message": "Invalid JSON payload"}
+
     event = payload.get("Event")
 
-    if event != "ItemAdded":
+    # Filter out raw template strings or wrong events
+    if not event or "NotificationType" in event or event != "ItemAdded":
         return {"status": "ignored", "event": event}
 
     if payload.get("ItemType") != "Movie":
         return {"status": "ignored", "item_type": payload.get("ItemType")}
 
     movie_title = payload.get("Name")
+    if not movie_title or "Name" in movie_title:
+        return {"status": "ignored", "reason": "Missing or template movie name"}
+
     print(f"[JELLYFIN WEBHOOK] New movie added to library: {movie_title}")
 
     try:
@@ -284,14 +300,22 @@ def jellyfin_webhook(payload: dict):
         res.raise_for_status()
 
         radarr_movie = None
-        jellyfin_tmdb = payload.get("ProviderIds", {}).get("Tmdb")
-        jellyfin_imdb = payload.get("ProviderIds", {}).get("Imdb")
+        provider_ids = payload.get("ProviderIds") or {}
+
+        # Clean helper: treat raw template variables as empty string
+        def clean_id(val):
+            if not val or "ProviderIds" in str(val):
+                return ""
+            return str(val).strip()
+
+        jellyfin_tmdb = clean_id(provider_ids.get("Tmdb"))
+        jellyfin_imdb = clean_id(provider_ids.get("Imdb"))
 
         for m in res.json():
-            if jellyfin_tmdb and str(m.get("tmdbId")) == str(jellyfin_tmdb):
+            if jellyfin_tmdb and str(m.get("tmdbId")) == jellyfin_tmdb:
                 radarr_movie = m
                 break
-            if jellyfin_imdb and str(m.get("imdbId")) == str(jellyfin_imdb):
+            if jellyfin_imdb and str(m.get("imdbId")) == jellyfin_imdb:
                 radarr_movie = m
                 break
             if clean_title(m.get("title")) == clean_title(movie_title):
@@ -313,7 +337,6 @@ def jellyfin_webhook(payload: dict):
     except Exception as e:
         print(f"Error processing Jellyfin webhook: {e}")
         return {"status": "error", "message": str(e)}
-
 
 # -----------------------------
 # RADARR WEBHOOK (FALLBACK)
