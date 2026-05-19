@@ -1,110 +1,224 @@
-import express from "express";
-import axios from "axios";
+import os
+import requests
 
-const app = express();
-app.use(express.json());
+from fastapi import FastAPI, Request
+from dotenv import load_dotenv
 
-// =====================
-// CONFIG
-// =====================
-const RADARR_URL = process.env.RADARR_URL;
-const RADARR_API_KEY = process.env.RADARR_API_KEY;
+load_dotenv()
 
-// =====================
-// LOAD TAG MAPPING (ENV)
-// TAG_SUBMARINE=submarine
-// TAG_WAR=war
-// =====================
-function loadTagMap() {
-  const map = {};
+app = FastAPI()
 
-  for (const [key, value] of Object.entries(process.env)) {
-    if (!key.startsWith("TAG_")) continue;
+RADARR_URL = os.getenv("RADARR_URL")
+RADARR_KEY = os.getenv("RADARR_KEY")
 
-    const tagKey = key.slice(4).toLowerCase(); // TAG_SUBMARINE -> submarine
-    const collection = (value || tagKey).toLowerCase();
+JELLYFIN_URL = os.getenv("JELLYFIN_URL")
+JELLYFIN_KEY = os.getenv("JELLYFIN_KEY")
 
-    map[tagKey] = collection;
-  }
+collection_map = {}
 
-  return map;
-}
+for key, value in os.environ.items():
+    if key.startswith("TAG_"):
+        tag = key.replace("TAG_", "").lower().strip()
+        collection_map[tag] = value.strip()
 
-// =====================
-// RADARR TAGS (ID -> LABEL)
-// =====================
-async function fetchRadarrTags() {
-  const res = await axios.get(`${RADARR_URL}/api/v3/tag`, {
-    headers: { "X-Api-Key": RADARR_API_KEY },
-  });
+print("Collection map loaded:", collection_map)
 
-  const tagMap = {};
-  for (const tag of res.data) {
-    tagMap[tag.id] = tag.label.toLowerCase();
-  }
 
-  return tagMap;
-}
+# -----------------------------
+# RADARR
+# -----------------------------
+def get_radarr_tags():
+    res = requests.get(
+        f"{RADARR_URL}/api/v3/tag",
+        headers={"X-Api-Key": RADARR_KEY},
+    )
+    res.raise_for_status()
 
-// =====================
-// RADARR MOVIES
-// =====================
-async function fetchMovies() {
-  const res = await axios.get(`${RADARR_URL}/api/v3/movie`, {
-    headers: { "X-Api-Key": RADARR_API_KEY },
-  });
-
-  return res.data;
-}
-
-// =====================
-// MAIN LOGIC
-// =====================
-app.post("/fullscan", async (req, res) => {
-  try {
-    const tagMapEnv = loadTagMap();
-    const radarrTagMap = await fetchRadarrTags();
-    const movies = await fetchMovies();
-
-    const processed = [];
-
-    for (const movie of movies) {
-      const movieTagNames = (movie.tags || [])
-        .map((id) => radarrTagMap[id])
-        .filter(Boolean)
-        .map((t) => t.toLowerCase());
-
-      const collections = [];
-
-      for (const tag of movieTagNames) {
-        if (tagMapEnv[tag]) {
-          collections.push(tagMapEnv[tag]);
-        }
-      }
-
-      // dedupe
-      const uniqueCollections = [...new Set(collections)];
-
-      processed.push({
-        movie: movie.title,
-        collections: uniqueCollections,
-      });
+    return {
+        t["id"]: t["label"].lower().strip()
+        for t in res.json()
     }
 
-    res.json({
-      status: "ok",
-      processed,
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      status: "error",
-      message: err.message,
-    });
-  }
-});
 
-// =====================
-app.listen(8787, () => {
-  console.log("Worker running on :8787");
-});
+# -----------------------------
+# JELLYFIN HELPERS
+# -----------------------------
+def jellyfin_headers():
+    return {
+        "X-Emby-Token": JELLYFIN_KEY,
+        "Content-Type": "application/json"
+    }
+
+
+def find_jellyfin_movie(movie_path):
+    res = requests.get(
+        f"{JELLYFIN_URL}/Items",
+        headers=jellyfin_headers(),
+        params={
+            "Recursive": "true",
+            "IncludeItemTypes": "Movie",
+            "Fields": "Path"
+        }
+    )
+
+    if res.status_code != 200:
+        print("Jellyfin error:", res.text)
+        return None
+
+    data = res.json()
+
+    norm_path = os.path.normpath(movie_path)
+
+    for item in data.get("Items", []):
+        if not item.get("Path"):
+            continue
+
+        if os.path.normpath(item["Path"]).startswith(norm_path):
+            return item["Id"]
+
+    return None
+
+
+def get_or_create_collection(name):
+    # 1. suchen
+    res = requests.get(
+        f"{JELLYFIN_URL}/Items",
+        headers=jellyfin_headers(),
+        params={
+            "Recursive": "true",
+            "IncludeItemTypes": "BoxSet",
+            "SearchTerm": name
+        }
+    )
+
+    if res.status_code == 200:
+        items = res.json().get("Items", [])
+        for item in items:
+            if item["Name"].lower() == name.lower():
+                return item["Id"]
+
+    # 2. erstellen
+    print(f"Creating collection: {name}")
+
+    res = requests.post(
+        f"{JELLYFIN_URL}/Collections",
+        headers=jellyfin_headers(),
+        json={
+            "Name": name,
+            "IsLocked": False
+        }
+    )
+
+    if res.status_code not in [200, 201]:
+        print("Failed to create collection:", res.text)
+        return None
+
+    return res.json().get("Id")
+
+
+def add_movie_to_collection(collection_id, movie_id):
+    # Collection laden
+    res = requests.get(
+        f"{JELLYFIN_URL}/Items/{collection_id}",
+        headers=jellyfin_headers()
+    )
+
+    if res.status_code != 200:
+        return False
+
+    collection = res.json()
+    existing = collection.get("LinkedChildren", [])
+
+    if movie_id in [m.get("Id") for m in existing]:
+        return True  # schon drin
+
+    # hinzufügen
+    res = requests.post(
+        f"{JELLYFIN_URL}/Collections/{collection_id}/Items",
+        headers=jellyfin_headers(),
+        json={"Ids": [movie_id]}
+    )
+
+    return res.status_code in [200, 204]
+
+
+# -----------------------------
+# CORE LOGIC
+# -----------------------------
+def process_movie(movie):
+    radarr_tags = get_radarr_tags()
+
+    tag_names = [
+        radarr_tags[t].lower().strip()
+        for t in movie.get("tags", [])
+        if t in radarr_tags
+    ]
+
+    collections = [
+        collection_map[t]
+        for t in tag_names
+        if t in collection_map
+    ]
+
+    movie_path = movie.get("folderName") or movie.get("path")
+    movie_id = find_jellyfin_movie(movie_path)
+
+    result = {
+        "movie": movie.get("title"),
+        "collections": []
+    }
+
+    if not movie_id:
+        return result
+
+    for collection_name in collections:
+        collection_id = get_or_create_collection(collection_name)
+
+        if collection_id:
+            add_movie_to_collection(collection_id, movie_id)
+            result["collections"].append(collection_name)
+
+    return result
+
+
+# -----------------------------
+# RADARR WEBHOOK
+# -----------------------------
+@app.post("/radarr")
+async def radarr_webhook(request: Request):
+    payload = await request.json()
+    event = payload.get("eventType")
+
+    if event == "Test":
+        return {"status": "ok", "message": "test received"}
+
+    movie = payload.get("movie")
+    if not movie:
+        return {"status": "ignored"}
+
+    return {
+        "status": "ok",
+        "processed": process_movie(movie)
+    }
+
+
+# -----------------------------
+# FULLSCAN
+# -----------------------------
+@app.post("/fullscan")
+async def fullscan():
+    res = requests.get(
+        f"{RADARR_URL}/api/v3/movie",
+        headers={"X-Api-Key": RADARR_KEY},
+    )
+    res.raise_for_status()
+
+    processed = []
+
+    for movie in res.json():
+        processed.append(process_movie(movie))
+
+    return {
+        "status": "ok",
+        "processed": processed
+    }
