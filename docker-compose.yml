@@ -800,6 +800,7 @@ services:
     env_file:
       - ./global.env
       - ./worker.env
+      - ./tags.env
     ports:
       - "8787:8787"
 
