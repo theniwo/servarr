@@ -7,48 +7,30 @@ load_dotenv()
 
 app = FastAPI()
 
+# -----------------------------
+# ENV
+# -----------------------------
 RADARR_URL = os.getenv("RADARR_URL")
 RADARR_KEY = os.getenv("RADARR_KEY")
 
 JELLYFIN_URL = os.getenv("JELLYFIN_URL")
 JELLYFIN_KEY = os.getenv("JELLYFIN_KEY")
 
-
 # -----------------------------
-# TAG → COLLECTION MAP
+# TAG → COLLECTION MAPPING
 # -----------------------------
-def normalize(s: str) -> str:
-    return s.strip().lower().replace(" ", "-")
-
-
 collection_map = {}
 
 for key, value in os.environ.items():
     if key.startswith("TAG_"):
-        tag = normalize(key.replace("TAG_", ""))
+        tag = key.replace("TAG_", "").lower().strip()
         collection_map[tag] = value.strip()
 
 print("Collection map loaded:", collection_map)
 
 
 # -----------------------------
-# RADARR
-# -----------------------------
-def get_radarr_tags():
-    res = requests.get(
-        f"{RADARR_URL}/api/v3/tag",
-        headers={"X-Api-Key": RADARR_KEY},
-    )
-    res.raise_for_status()
-
-    return {
-        t["id"]: normalize(t["label"])
-        for t in res.json()
-    }
-
-
-# -----------------------------
-# JELLYFIN
+# HEADERS
 # -----------------------------
 def jellyfin_headers():
     return {
@@ -57,92 +39,108 @@ def jellyfin_headers():
     }
 
 
+# -----------------------------
+# RADARR TAGS
+# -----------------------------
+def get_radarr_tags():
+    res = requests.get(
+        f"{RADARR_URL}/api/v3/tag",
+        headers={"X-Api-Key": RADARR_KEY},
+        timeout=10
+    )
+    res.raise_for_status()
+
+    return {
+        t["id"]: t["label"].lower().strip()
+        for t in res.json()
+    }
+
+
+# -----------------------------
+# FIND MOVIE IN JELLYFIN
+# -----------------------------
 def find_jellyfin_movie(movie_path):
-    """
-    Best-effort lookup: NEVER blocks pipeline
-    """
-    try:
-        res = requests.get(
-            f"{JELLYFIN_URL}/Items",
-            headers=jellyfin_headers(),
-            params={
-                "Recursive": "true",
-                "IncludeItemTypes": "Movie",
-                "Fields": "Path"
-            },
-            timeout=10
-        )
+    res = requests.get(
+        f"{JELLYFIN_URL}/Items",
+        headers=jellyfin_headers(),
+        params={
+            "Recursive": "true",
+            "IncludeItemTypes": "Movie",
+            "Fields": "Path"
+        },
+        timeout=20
+    )
 
-        if res.status_code != 200:
-            print("Jellyfin error:", res.text)
-            return None
+    if res.status_code != 200:
+        print("Jellyfin error:", res.text)
+        return None
 
-        data = res.json()
+    norm_path = os.path.normpath(movie_path or "")
 
-        norm_path = os.path.normpath(movie_path)
+    for item in res.json().get("Items", []):
+        if not item.get("Path"):
+            continue
 
-        for item in data.get("Items", []):
-            path = item.get("Path")
-            if not path:
-                continue
+        if os.path.normpath(item["Path"]).startswith(norm_path):
+            return item["Id"]
 
-            if os.path.normpath(path).startswith(norm_path):
+    return None
+
+
+# -----------------------------
+# GET OR CREATE COLLECTION
+# -----------------------------
+def get_or_create_collection(name):
+    # search
+    res = requests.get(
+        f"{JELLYFIN_URL}/Items",
+        headers=jellyfin_headers(),
+        params={
+            "Recursive": "true",
+            "IncludeItemTypes": "BoxSet",
+            "SearchTerm": name
+        },
+        timeout=10
+    )
+
+    if res.status_code == 200:
+        for item in res.json().get("Items", []):
+            if item["Name"].lower() == name.lower():
                 return item["Id"]
 
-    except Exception as e:
-        print("Jellyfin exception:", str(e))
+    # create
+    print(f"Creating collection: {name}")
 
-    return None
+    res = requests.post(
+        f"{JELLYFIN_URL}/Collections",
+        headers=jellyfin_headers(),
+        json={
+            "Name": name,
+            "IsLocked": False
+        },
+        timeout=10
+    )
 
+    if res.status_code not in [200, 201]:
+        print("Failed to create collection:", res.text)
+        return None
 
-def get_or_create_collection(name):
-    try:
-        res = requests.get(
-            f"{JELLYFIN_URL}/Items",
-            headers=jellyfin_headers(),
-            params={
-                "Recursive": "true",
-                "IncludeItemTypes": "BoxSet",
-                "SearchTerm": name
-            },
-            timeout=10
-        )
-
-        if res.status_code == 200:
-            items = res.json().get("Items", [])
-            for item in items:
-                if item["Name"].lower() == name.lower():
-                    return item["Id"]
-
-        print(f"Creating collection: {name}")
-
-        res = requests.post(
-            f"{JELLYFIN_URL}/Collections",
-            headers=jellyfin_headers(),
-            json={
-                "Name": name,
-                "IsLocked": False
-            },
-            timeout=10
-        )
-
-        if res.status_code in [200, 201]:
-            return res.json().get("Id")
-
-    except Exception as e:
-        print("Collection error:", str(e))
-
-    return None
+    return res.json().get("Id")
 
 
+# -----------------------------
+# ADD MOVIE TO COLLECTION (FIXED)
+# -----------------------------
 def add_movie_to_collection(collection_id, movie_id):
     try:
         res = requests.post(
-            f"{JELLYFIN_URL}/Collections/{collection_id}/Items",
+            f"{JELLYFIN_URL}/Collections/{collection_id}/Items/Add",
             headers=jellyfin_headers(),
             json={"Ids": [movie_id]},
             timeout=10
         )
+
+        print(f"[JELLYFIN ADD] {res.status_code} {res.text}")
 
         return res.status_code in [200, 204]
 
@@ -152,21 +150,41 @@ def add_movie_to_collection(collection_id, movie_id):
 
 
 # -----------------------------
+# OPTIONAL: SET COLLECTION POSTER (HOOK)
+# -----------------------------
+def set_collection_poster(collection_id, image_url=None):
+    """
+    Optional hook.
+    You can later plug TMDB or Radarr artwork here.
+    """
+    if not image_url:
+        return
+
+    try:
+        res = requests.post(
+            f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
+            headers=jellyfin_headers(),
+            json={"ImageUrl": image_url},
+            timeout=10
+        )
+
+        print(f"[POSTER] {res.status_code} {res.text}")
+
+    except Exception as e:
+        print("Poster error:", str(e))
+
+
+# -----------------------------
 # CORE LOGIC
 # -----------------------------
 def process_movie(movie):
     radarr_tags = get_radarr_tags()
 
-    tag_ids = movie.get("tagIds") or movie.get("tags") or []
-
     tag_names = [
-        radarr_tags[t]
-        for t in tag_ids
+        radarr_tags[t].lower().strip()
+        for t in movie.get("tags", [])
         if t in radarr_tags
     ]
-
-    # normalize tags for mapping
-    tag_names = [normalize(t) for t in tag_names]
 
     collections = [
         collection_map[t]
@@ -179,17 +197,24 @@ def process_movie(movie):
 
     result = {
         "movie": movie.get("title"),
-        "collections": collections
+        "movie_id": movie_id,
+        "collections": []
     }
 
-    if not collections:
+    if not movie_id:
+        print(f"[SKIP] Movie not found in Jellyfin: {movie.get('title')}")
         return result
 
     for collection_name in collections:
         collection_id = get_or_create_collection(collection_name)
 
-        if collection_id and movie_id:
-            add_movie_to_collection(collection_id, movie_id)
+        if not collection_id:
+            continue
+
+        ok = add_movie_to_collection(collection_id, movie_id)
+
+        if ok:
+            result["collections"].append(collection_name)
 
     return result
 
@@ -203,7 +228,7 @@ async def radarr_webhook(request: Request):
     event = payload.get("eventType")
 
     if event == "Test":
-        return {"status": "ok"}
+        return {"status": "ok", "message": "test received"}
 
     movie = payload.get("movie")
     if not movie:
@@ -219,12 +244,13 @@ async def radarr_webhook(request: Request):
 # FULLSCAN
 # -----------------------------
 @app.post("/fullscan")
-@app.get("/fullscan")
 async def fullscan():
     res = requests.get(
         f"{RADARR_URL}/api/v3/movie",
         headers={"X-Api-Key": RADARR_KEY},
+        timeout=20
     )
+
     res.raise_for_status()
 
     processed = []
