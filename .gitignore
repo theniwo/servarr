@@ -1,3 +1,7 @@
 *.env
 config.json
 *.swp
+**/__pycache__/
+*.pyc
+metadata-worker/__pycache__/
+metadata-worker/__pycache__/worker.cpython-311.pyc

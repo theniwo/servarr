@@ -1,7 +1,13 @@
 import os
+import re
+import io
 import requests
+import asyncio
+import json
+import base64
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
+from PIL import Image as PILImage
 
 load_dotenv()
 
@@ -40,6 +46,18 @@ def jellyfin_headers():
 
 
 # -----------------------------
+# UTILS
+# -----------------------------
+def clean_title(title):
+    """Removes all special characters, spaces, and accents for loose matching."""
+    if not title:
+        return ""
+    title = title.lower()
+    title = re.sub(r'[^a-z0-9]', '', title)
+    return title
+
+
+# -----------------------------
 # RADARR TAGS
 # -----------------------------
 def get_radarr_tags():
@@ -57,32 +75,89 @@ def get_radarr_tags():
 
 
 # -----------------------------
-# FIND MOVIE IN JELLYFIN
+# JELLYFIN MAP BUILDERS
 # -----------------------------
-def find_jellyfin_movie(movie_path):
-    res = requests.get(
-        f"{JELLYFIN_URL}/Items",
-        headers=jellyfin_headers(),
-        params={
-            "Recursive": "true",
-            "IncludeItemTypes": "Movie",
-            "Fields": "Path"
-        },
-        timeout=20
-    )
+def build_jellyfin_maps(search_term=None):
+    params = {
+        "Recursive": "true",
+        "IncludeItemTypes": "Movie",
+        "Fields": "Path,ProviderIds,Name,OriginalTitle"
+    }
+    if search_term:
+        params["SearchTerm"] = search_term
 
-    if res.status_code != 200:
-        print("Jellyfin error:", res.text)
-        return None
+    try:
+        res = requests.get(
+            f"{JELLYFIN_URL}/Items",
+            headers=jellyfin_headers(),
+            params=params,
+            timeout=30
+        )
+        res.raise_for_status()
+    except Exception as e:
+        print(f"Failed to fetch items from Jellyfin: {e}")
+        return {"tmdb": {}, "imdb": {}, "folder": {}, "title": {}}
 
-    norm_path = os.path.normpath(movie_path or "")
+    tmdb_map = {}
+    imdb_map = {}
+    folder_map = {}
+    title_map = {}
 
     for item in res.json().get("Items", []):
-        if not item.get("Path"):
-            continue
+        j_id = item.get("Id")
+        p_ids = item.get("ProviderIds", {})
+        path = item.get("Path")
+        name = item.get("Name")
+        orig_title = item.get("OriginalTitle")
 
-        if os.path.normpath(item["Path"]).startswith(norm_path):
-            return item["Id"]
+        if "Tmdb" in p_ids and p_ids["Tmdb"]:
+            tmdb_map[str(p_ids["Tmdb"])] = j_id
+        if "Imdb" in p_ids and p_ids["Imdb"]:
+            imdb_map[str(p_ids["Imdb"])] = j_id
+
+        if path:
+            folder_name = os.path.basename(os.path.dirname(path)).lower()
+            folder_map[folder_name] = j_id
+
+            file_name, _ = os.path.splitext(os.path.basename(path))
+            folder_map[file_name.lower()] = j_id
+
+        if name:
+            title_map[clean_title(name)] = j_id
+        if orig_title:
+            title_map[clean_title(orig_title)] = j_id
+
+    return {
+        "tmdb": tmdb_map,
+        "imdb": imdb_map,
+        "folder": folder_map,
+        "title": title_map
+    }
+
+
+def match_movie_to_jellyfin(movie, maps):
+    # 1. Try matching by TMDB ID
+    tmdb_id = str(movie.get("tmdbId") or "")
+    if tmdb_id and tmdb_id in maps["tmdb"]:
+        return maps["tmdb"][tmdb_id]
+
+    # 2. Try matching by IMDb ID
+    imdb_id = str(movie.get("imdbId") or "")
+    if imdb_id and imdb_id in maps["imdb"]:
+        return maps["imdb"][imdb_id]
+
+    # 3. Try matching by Cleaned Title
+    radarr_title = movie.get("title")
+    cleaned_radarr = clean_title(radarr_title)
+    if cleaned_radarr and cleaned_radarr in maps["title"]:
+        return maps["title"][cleaned_radarr]
+
+    # 4. Try matching by folder base name or file name
+    movie_path = movie.get("folderName") or movie.get("path") or ""
+    if movie_path:
+        folder_name = os.path.basename(os.path.normpath(movie_path)).lower()
+        if folder_name in maps["folder"]:
+            return maps["folder"][folder_name]
 
     return None
 
@@ -91,7 +166,6 @@ def find_jellyfin_movie(movie_path):
 # GET OR CREATE COLLECTION
 # -----------------------------
 def get_or_create_collection(name):
-    # search
     res = requests.get(
         f"{JELLYFIN_URL}/Items",
         headers=jellyfin_headers(),
@@ -108,78 +182,131 @@ def get_or_create_collection(name):
             if item["Name"].lower() == name.lower():
                 return item["Id"]
 
-    # create
     print(f"Creating collection: {name}")
-
     res = requests.post(
         f"{JELLYFIN_URL}/Collections",
         headers=jellyfin_headers(),
-        json={
-            "Name": name,
-            "IsLocked": False
-        },
+        params={"Name": name},
         timeout=10
     )
 
     if res.status_code not in [200, 201]:
-        print("Failed to create collection:", res.text)
+        print(f"Failed to create collection: (Status: {res.status_code}) - {res.text}")
         return None
 
-    return res.json().get("Id")
+    try:
+        return res.json().get("Id")
+    except Exception:
+        return None
 
 
 # -----------------------------
-# ADD MOVIE TO COLLECTION (FIXED)
+# ADD MOVIE TO COLLECTION
 # -----------------------------
-def add_movie_to_collection(collection_id, movie_id):
+def add_movie_to_collection(collection_id, movie_id, movie_title, collection_name):
     try:
         res = requests.post(
-            f"{JELLYFIN_URL}/Collections/{collection_id}/Items/Add",
+            f"{JELLYFIN_URL}/Collections/{collection_id}/Items",
             headers=jellyfin_headers(),
-            json={"Ids": [movie_id]},
+            params={"Ids": movie_id},
             timeout=10
         )
 
-        print(f"[JELLYFIN ADD] {res.status_code} {res.text}")
-
-        return res.status_code in [200, 204]
+        if res.status_code in [200, 204]:
+            print(f"[JELLYFIN ADD] Successfully added \"{movie_title}\" to collection \"{collection_name}\" (Status: {res.status_code})")
+            return True
+        else:
+            print(f"[JELLYFIN ADD ERROR] Failed for \"{movie_title}\" to collection \"{collection_name}\" (Status: {res.status_code}) - {res.text}")
+            return False
 
     except Exception as e:
-        print("Add to collection error:", str(e))
+        print(f"Add to collection error for \"{movie_title}\" / \"{collection_name}\":", str(e))
         return False
 
 
 # -----------------------------
-# OPTIONAL: SET COLLECTION POSTER (HOOK)
+# GENERATE GRID COVER (COLLAGE)
 # -----------------------------
-def set_collection_poster(collection_id, image_url=None):
-    """
-    Optional hook.
-    You can later plug TMDB or Radarr artwork here.
-    """
-    if not image_url:
-        return
-
+def generate_collection_collage(collection_id, collection_name):
+    """Fetches movies from the collection, builds a 2x2 grid, and uploads it via Base64."""
     try:
-        res = requests.post(
-            f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
+        res = requests.get(
+            f"{JELLYFIN_URL}/Items",
             headers=jellyfin_headers(),
-            json={"ImageUrl": image_url},
+            params={
+                "ParentId": collection_id,
+                "Recursive": "true",
+                "IncludeItemTypes": "Movie",
+                "Fields": "PrimaryImageTag"
+            },
             timeout=10
         )
+        res.raise_for_status()
+        items = res.json().get("Items", [])
 
-        print(f"[POSTER] {res.status_code} {res.text}")
+        if len(items) < 2:
+            print(f"[POSTER] Not enough movies ({len(items)}) in '{collection_name}' for a collage yet.")
+            return
+
+        movies_to_use = items[:4]
+        images = []
+
+        for movie in movies_to_use:
+            m_id = movie["Id"]
+            img_res = requests.get(f"{JELLYFIN_URL}/Items/{m_id}/Images/Primary", timeout=10)
+            if img_res.status_code == 200:
+                try:
+                    images.append(PILImage.open(io.BytesIO(img_res.content)))
+                except Exception as img_err:
+                    print(f"[POSTER WARNING] Skipping broken image for item {m_id}: {img_err}")
+
+        if not images:
+            return
+
+        poster_w, poster_h = 400, 600
+        resized_images = [img.resize((poster_w, poster_h), PILImage.Resampling.LANCZOS) for img in images]
+
+        if len(resized_images) >= 4:
+            canvas = PILImage.new("RGB", (poster_w * 2, poster_h * 2))
+            canvas.paste(resized_images[0], (0, 0))
+            canvas.paste(resized_images[1], (poster_w, 0))
+            canvas.paste(resized_images[2], (0, poster_h))
+            canvas.paste(resized_images[3], (poster_w, poster_h))
+        else:
+            canvas = PILImage.new("RGB", (poster_w * 2, poster_h))
+            canvas.paste(resized_images[0], (0, 0))
+            canvas.paste(resized_images[1], (poster_w, 0))
+
+        img_byte_arr = io.BytesIO()
+        canvas.save(img_byte_arr, format='JPEG', quality=90)
+        img_byte_arr.seek(0)
+
+        base64_encoded = base64.b64encode(img_byte_arr.read()).decode("utf-8")
+
+        upload_headers = jellyfin_headers().copy()
+        upload_headers["Content-Type"] = "image/jpeg"
+
+        upload_res = requests.post(
+            f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
+            headers=upload_headers,
+            params={"api_key": JELLYFIN_KEY},
+            data=base64_encoded,
+            timeout=15
+        )
+
+        if upload_res.status_code in [200, 204]:
+            print(f"[POSTER] Successfully updated grid cover for collection '{collection_name}'")
+        else:
+            print(f"[POSTER ERROR] Failed to upload collage: (Status: {upload_res.status_code}) - {upload_res.text}")
 
     except Exception as e:
-        print("Poster error:", str(e))
+        print(f"[POSTER ERROR] Failed to create collage for {collection_name}: {e}")
 
 
 # -----------------------------
 # CORE LOGIC
 # -----------------------------
-def process_movie(movie):
-    radarr_tags = get_radarr_tags()
-
+def process_movie(movie, radarr_tags, jellyfin_maps):
     tag_names = [
         radarr_tags[t].lower().strip()
         for t in movie.get("tags", [])
@@ -192,39 +319,137 @@ def process_movie(movie):
         if t in collection_map
     ]
 
-    movie_path = movie.get("folderName") or movie.get("path")
-    movie_id = find_jellyfin_movie(movie_path)
+    movie_id = match_movie_to_jellyfin(movie, jellyfin_maps)
+    movie_title = movie.get("title")
 
     result = {
-        "movie": movie.get("title"),
+        "movie": movie_title,
         "movie_id": movie_id,
         "collections": []
     }
 
     if not movie_id:
-        print(f"[SKIP] Movie not found in Jellyfin: {movie.get('title')}")
+        print(f"[SKIP] Movie not found in Jellyfin: {movie_title}")
         return result
 
     for collection_name in collections:
         collection_id = get_or_create_collection(collection_name)
-
         if not collection_id:
             continue
 
-        ok = add_movie_to_collection(collection_id, movie_id)
-
+        ok = add_movie_to_collection(collection_id, movie_id, movie_title, collection_name)
         if ok:
             result["collections"].append(collection_name)
+            generate_collection_collage(collection_id, collection_name)
 
     return result
 
 
 # -----------------------------
-# RADARR WEBHOOK
+# JELLYFIN WEBHOOK
+# -----------------------------
+@app.post("/jellyfin")
+async def jellyfin_webhook(request: Request):
+    """Handles Jellyfin webhooks by reading the raw body to prevent 422 parsing errors."""
+    try:
+        body_bytes = await request.body()
+        body_str = body_bytes.decode("utf-8").strip()
+
+        if not body_str:
+            print("[JELLYFIN ERROR] Received empty body")
+            return {"status": "error", "message": "Empty body"}
+
+        payload = json.loads(body_str)
+
+    except Exception as e:
+        print(f"[JELLYFIN ERROR] Failed to parse raw payload: {e}")
+        return {"status": "error", "message": "Invalid JSON format"}
+
+    event = payload.get("Event")
+
+    if not event or "NotificationType" in event or event != "ItemAdded":
+        return {"status": "ignored", "event": event}
+
+    if payload.get("ItemType") != "Movie":
+        return {"status": "ignored", "item_type": payload.get("ItemType")}
+
+    movie_title = payload.get("Name")
+    if not movie_title or "Name" in movie_title:
+        return {"status": "ignored", "reason": "Missing or template movie name"}
+
+    print(f"[JELLYFIN WEBHOOK] New movie added to library: {movie_title}")
+
+    try:
+        res = requests.get(
+            f"{RADARR_URL}/api/v3/movie",
+            headers={"X-Api-Key": RADARR_KEY},
+            timeout=20
+        )
+        res.raise_for_status()
+
+        radarr_movie = None
+        provider_ids = payload.get("ProviderIds") or {}
+
+        def clean_id(val):
+            if not val or "ProviderIds" in str(val):
+                return ""
+            return str(val).strip()
+
+        jellyfin_tmdb = clean_id(provider_ids.get("Tmdb"))
+        jellyfin_imdb = clean_id(provider_ids.get("Imdb"))
+
+        # Parse and separate title and trailing year (e.g., "Solaris (2002)" -> "Solaris", "2002")
+        match = re.search(r"^(.*?)\s*\((\d{4})\)$", movie_title)
+        if match:
+            cleaned_jf_title = match.group(1).strip()
+            jf_year = match.group(2)
+        else:
+            cleaned_jf_title = movie_title
+            jf_year = None
+
+        for m in res.json():
+            # Strategy 1: Match via IDs
+            if jellyfin_tmdb and str(m.get("tmdbId")) == jellyfin_tmdb:
+                radarr_movie = m
+                break
+            if jellyfin_imdb and str(m.get("imdbId")) == jellyfin_imdb:
+                radarr_movie = m
+                break
+
+            # Strategy 2: Match via cleaned title and production year
+            radarr_title = m.get("title", "")
+            radarr_year = str(m.get("year", ""))
+
+            if clean_title(radarr_title) == clean_title(cleaned_jf_title):
+                if jf_year and radarr_year == jf_year:
+                    radarr_movie = m
+                    break
+                elif not jf_year:
+                    radarr_movie = m
+                    break
+
+        if not radarr_movie:
+            print(f"[SKIP] Movie \"{movie_title}\" not found in Radarr.")
+            return {"status": "not_found_in_radarr"}
+
+        radarr_tags = get_radarr_tags()
+        jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
+
+        return {
+            "status": "ok",
+            "processed": process_movie(radarr_movie, radarr_tags, jellyfin_maps)
+        }
+
+    except Exception as e:
+        print(f"Error processing Jellyfin webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# -----------------------------
+# RADARR WEBHOOK (FALLBACK)
 # -----------------------------
 @app.post("/radarr")
-async def radarr_webhook(request: Request):
-    payload = await request.json()
+def radarr_webhook(payload: dict):
     event = payload.get("eventType")
 
     if event == "Test":
@@ -234,9 +459,12 @@ async def radarr_webhook(request: Request):
     if not movie:
         return {"status": "ignored"}
 
+    radarr_tags = get_radarr_tags()
+    jellyfin_maps = build_jellyfin_maps(search_term=movie.get("title"))
+
     return {
         "status": "ok",
-        "processed": process_movie(movie)
+        "processed": process_movie(movie, radarr_tags, jellyfin_maps)
     }
 
 
@@ -244,19 +472,22 @@ async def radarr_webhook(request: Request):
 # FULLSCAN
 # -----------------------------
 @app.post("/fullscan")
-async def fullscan():
+def fullscan():
+    print("Starting full scan...")
+
+    radarr_tags = get_radarr_tags()
+    jellyfin_maps = build_jellyfin_maps()
+
     res = requests.get(
         f"{RADARR_URL}/api/v3/movie",
         headers={"X-Api-Key": RADARR_KEY},
         timeout=20
     )
-
     res.raise_for_status()
 
     processed = []
-
     for movie in res.json():
-        processed.append(process_movie(movie))
+        processed.append(process_movie(movie, radarr_tags, jellyfin_maps))
 
     return {
         "status": "ok",
