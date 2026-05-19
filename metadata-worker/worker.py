@@ -14,6 +14,9 @@ RADARR_KEY = os.getenv("RADARR_KEY")
 JELLYFIN_URL = os.getenv("JELLYFIN_URL")
 JELLYFIN_KEY = os.getenv("JELLYFIN_KEY")
 
+# -----------------------------
+# TAG → COLLECTION MAP
+# -----------------------------
 collection_map = {}
 
 for key, value in os.environ.items():
@@ -38,6 +41,14 @@ def get_radarr_tags():
         t["id"]: t["label"].lower().strip()
         for t in res.json()
     }
+
+
+def get_radarr_poster(movie):
+    images = movie.get("images", [])
+    for img in images:
+        if img.get("coverType") == "poster":
+            return img.get("remoteUrl") or img.get("url")
+    return None
 
 
 # -----------------------------
@@ -79,8 +90,34 @@ def find_jellyfin_movie(movie_path):
     return None
 
 
-def get_or_create_collection(name):
-    # 1. suchen
+def set_collection_poster(collection_id, image_url):
+    if not image_url:
+        return False
+
+    try:
+        img = requests.get(image_url, stream=True)
+        if img.status_code != 200:
+            return False
+
+        files = {
+            "file": ("poster.jpg", img.content, "image/jpeg")
+        }
+
+        res = requests.post(
+            f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
+            headers={"X-Emby-Token": JELLYFIN_KEY},
+            files=files
+        )
+
+        return res.status_code in [200, 204]
+
+    except Exception as e:
+        print("Poster upload failed:", e)
+        return False
+
+
+def get_or_create_collection(name, poster_url=None):
+    # 1. search
     res = requests.get(
         f"{JELLYFIN_URL}/Items",
         headers=jellyfin_headers(),
@@ -97,7 +134,7 @@ def get_or_create_collection(name):
             if item["Name"].lower() == name.lower():
                 return item["Id"]
 
-    # 2. erstellen
+    # 2. create
     print(f"Creating collection: {name}")
 
     res = requests.post(
@@ -113,11 +150,16 @@ def get_or_create_collection(name):
         print("Failed to create collection:", res.text)
         return None
 
-    return res.json().get("Id")
+    collection_id = res.json().get("Id")
+
+    # 3. poster
+    if poster_url:
+        set_collection_poster(collection_id, poster_url)
+
+    return collection_id
 
 
 def add_movie_to_collection(collection_id, movie_id):
-    # Collection laden
     res = requests.get(
         f"{JELLYFIN_URL}/Items/{collection_id}",
         headers=jellyfin_headers()
@@ -130,9 +172,8 @@ def add_movie_to_collection(collection_id, movie_id):
     existing = collection.get("LinkedChildren", [])
 
     if movie_id in [m.get("Id") for m in existing]:
-        return True  # schon drin
+        return True
 
-    # hinzufügen
     res = requests.post(
         f"{JELLYFIN_URL}/Collections/{collection_id}/Items",
         headers=jellyfin_headers(),
@@ -163,6 +204,8 @@ def process_movie(movie):
     movie_path = movie.get("folderName") or movie.get("path")
     movie_id = find_jellyfin_movie(movie_path)
 
+    poster_url = get_radarr_poster(movie)
+
     result = {
         "movie": movie.get("title"),
         "collections": []
@@ -172,7 +215,10 @@ def process_movie(movie):
         return result
 
     for collection_name in collections:
-        collection_id = get_or_create_collection(collection_name)
+        collection_id = get_or_create_collection(
+            collection_name,
+            poster_url=poster_url
+        )
 
         if collection_id:
             add_movie_to_collection(collection_id, movie_id)
