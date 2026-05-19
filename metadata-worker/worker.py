@@ -225,7 +225,7 @@ def add_movie_to_collection(collection_id, movie_id, movie_title, collection_nam
 
 
 # -----------------------------
-# GENERATE GRID COVER (COLLAGE - FIXED)
+# GENERATE GRID COVER (COLLAGE)
 # -----------------------------
 def generate_collection_collage(collection_id, collection_name):
     """Fetches movies from the collection, builds a 2x2 grid, and uploads it via Base64."""
@@ -248,7 +248,6 @@ def generate_collection_collage(collection_id, collection_name):
             print(f"[POSTER] Not enough movies ({len(items)}) in '{collection_name}' for a collage yet.")
             return
 
-        # Use up to 4 movies for a clean 2x2 grid
         movies_to_use = items[:4]
         images = []
 
@@ -264,40 +263,28 @@ def generate_collection_collage(collection_id, collection_name):
         if not images:
             return
 
-        # Standard Jellyfin movie poster aspect ratio (approx. 2:3)
         poster_w, poster_h = 400, 600
         resized_images = [img.resize((poster_w, poster_h), PILImage.Resampling.LANCZOS) for img in images]
 
-        # Assemble the canvas grid based on available image count
         if len(resized_images) >= 4:
-            # 2x2 Grid
             canvas = PILImage.new("RGB", (poster_w * 2, poster_h * 2))
             canvas.paste(resized_images[0], (0, 0))
             canvas.paste(resized_images[1], (poster_w, 0))
             canvas.paste(resized_images[2], (0, poster_h))
             canvas.paste(resized_images[3], (poster_w, poster_h))
         else:
-            # 2x1 Grid (Side-by-side fallback)
             canvas = PILImage.new("RGB", (poster_w * 2, poster_h))
             canvas.paste(resized_images[0], (0, 0))
             canvas.paste(resized_images[1], (poster_w, 0))
 
-        # Save image to a memory stream buffer
         img_byte_arr = io.BytesIO()
         canvas.save(img_byte_arr, format='JPEG', quality=90)
         img_byte_arr.seek(0)
 
-        # Encode binary data to Base64 string
         base64_encoded = base64.b64encode(img_byte_arr.read()).decode("utf-8")
 
-        # Jellyfin expects a POST to /Images/Primary with the API Key also in the URL parameters
-        # to guarantee authentication for multi-part/string payloads.
-		# -----------------------------
-        # FIXED UPLOAD SECTION
-        # -----------------------------
-        # Copy headers to avoid modifying global headers for other requests
         upload_headers = jellyfin_headers().copy()
-        upload_headers["Content-Type"] = "image/jpeg"  # <-- Fix: Jellyfin tracks the MIME type via this header
+        upload_headers["Content-Type"] = "image/jpeg"
 
         upload_res = requests.post(
             f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
@@ -314,6 +301,7 @@ def generate_collection_collage(collection_id, collection_name):
 
     except Exception as e:
         print(f"[POSTER ERROR] Failed to create collage for {collection_name}: {e}")
+
 
 # -----------------------------
 # CORE LOGIC
@@ -352,20 +340,18 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
         ok = add_movie_to_collection(collection_id, movie_id, movie_title, collection_name)
         if ok:
             result["collections"].append(collection_name)
-            # Generate or update the grid cover artwork
             generate_collection_collage(collection_id, collection_name)
 
     return result
 
 
 # -----------------------------
-# JELLYFIN WEBHOOK (FIXED RAW PARSING)
+# JELLYFIN WEBHOOK
 # -----------------------------
 @app.post("/jellyfin")
 async def jellyfin_webhook(request: Request):
     """Handles Jellyfin webhooks by reading the raw body to prevent 422 parsing errors."""
     try:
-        # Read raw bytes and decode to string
         body_bytes = await request.body()
         body_str = body_bytes.decode("utf-8").strip()
 
@@ -373,7 +359,6 @@ async def jellyfin_webhook(request: Request):
             print("[JELLYFIN ERROR] Received empty body")
             return {"status": "error", "message": "Empty body"}
 
-        # Parse the string manually into a dictionary
         payload = json.loads(body_str)
 
     except Exception as e:
@@ -413,16 +398,35 @@ async def jellyfin_webhook(request: Request):
         jellyfin_tmdb = clean_id(provider_ids.get("Tmdb"))
         jellyfin_imdb = clean_id(provider_ids.get("Imdb"))
 
+        # Parse and separate title and trailing year (e.g., "Solaris (2002)" -> "Solaris", "2002")
+        match = re.search(r"^(.*?)\s*\((\d{4})\)$", movie_title)
+        if match:
+            cleaned_jf_title = match.group(1).strip()
+            jf_year = match.group(2)
+        else:
+            cleaned_jf_title = movie_title
+            jf_year = None
+
         for m in res.json():
+            # Strategy 1: Match via IDs
             if jellyfin_tmdb and str(m.get("tmdbId")) == jellyfin_tmdb:
                 radarr_movie = m
                 break
             if jellyfin_imdb and str(m.get("imdbId")) == jellyfin_imdb:
                 radarr_movie = m
                 break
-            if clean_title(m.get("title")) == clean_title(movie_title):
-                radarr_movie = m
-                break
+
+            # Strategy 2: Match via cleaned title and production year
+            radarr_title = m.get("title", "")
+            radarr_year = str(m.get("year", ""))
+
+            if clean_title(radarr_title) == clean_title(cleaned_jf_title):
+                if jf_year and radarr_year == jf_year:
+                    radarr_movie = m
+                    break
+                elif not jf_year:
+                    radarr_movie = m
+                    break
 
         if not radarr_movie:
             print(f"[SKIP] Movie \"{movie_title}\" not found in Radarr.")
@@ -439,6 +443,7 @@ async def jellyfin_webhook(request: Request):
     except Exception as e:
         print(f"Error processing Jellyfin webhook: {e}")
         return {"status": "error", "message": str(e)}
+
 
 # -----------------------------
 # RADARR WEBHOOK (FALLBACK)
