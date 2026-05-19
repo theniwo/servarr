@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
@@ -40,6 +41,18 @@ def jellyfin_headers():
 
 
 # -----------------------------
+# UTILS
+# -----------------------------
+def clean_title(title):
+    """Removes all special characters, spaces, and accents for loose matching."""
+    if not title:
+        return ""
+    title = title.lower()
+    title = re.sub(r'[^a-z0-9]', '', title)
+    return title
+
+
+# -----------------------------
 # RADARR TAGS
 # -----------------------------
 def get_radarr_tags():
@@ -57,7 +70,7 @@ def get_radarr_tags():
 
 
 # -----------------------------
-# JELLYFIN MAP BUILDERS (FIXED & OPTIMIZED)
+# JELLYFIN MAP BUILDERS
 # -----------------------------
 def build_jellyfin_maps(search_term=None):
     """
@@ -67,7 +80,7 @@ def build_jellyfin_maps(search_term=None):
     params = {
         "Recursive": "true",
         "IncludeItemTypes": "Movie",
-        "Fields": "Path,ProviderIds"
+        "Fields": "Path,ProviderIds,Name"
     }
     if search_term:
         params["SearchTerm"] = search_term
@@ -82,16 +95,18 @@ def build_jellyfin_maps(search_term=None):
         res.raise_for_status()
     except Exception as e:
         print(f"Failed to fetch items from Jellyfin: {e}")
-        return {"tmdb": {}, "imdb": {}, "folder": {}}
+        return {"tmdb": {}, "imdb": {}, "folder": {}, "title": {}}
 
     tmdb_map = {}
     imdb_map = {}
     folder_map = {}
+    title_map = {}
 
     for item in res.json().get("Items", []):
         j_id = item.get("Id")
         p_ids = item.get("ProviderIds", {})
         path = item.get("Path")
+        name = item.get("Name")
 
         if "Tmdb" in p_ids:
             tmdb_map[str(p_ids["Tmdb"])] = j_id
@@ -99,11 +114,18 @@ def build_jellyfin_maps(search_term=None):
             imdb_map[str(p_ids["Imdb"])] = j_id
 
         if path:
-            # Fallback: Match by the directory leaf name (e.g., "American Beauty (1999)")
             folder_name = os.path.basename(os.path.dirname(path)).lower()
             folder_map[folder_name] = j_id
 
-    return {"tmdb": tmdb_map, "imdb": imdb_map, "folder": folder_map}
+        if name:
+            title_map[clean_title(name)] = j_id
+
+    return {
+        "tmdb": tmdb_map,
+        "imdb": imdb_map,
+        "folder": folder_map,
+        "title": title_map
+    }
 
 
 def match_movie_to_jellyfin(movie, maps):
@@ -118,12 +140,18 @@ def match_movie_to_jellyfin(movie, maps):
     if imdb_id and imdb_id in maps["imdb"]:
         return maps["imdb"][imdb_id]
 
-    # 3. Try matching by folder base name (handles different Docker mount roots)
+    # 3. Try matching by folder base name
     movie_path = movie.get("folderName") or movie.get("path") or ""
     if movie_path:
         folder_name = os.path.basename(os.path.normpath(movie_path)).lower()
         if folder_name in maps["folder"]:
             return maps["folder"][folder_name]
+
+    # 4. Fallback: Loose Title Match (ignores punctuation, casing, dashes)
+    radarr_title = movie.get("title")
+    cleaned_radarr = clean_title(radarr_title)
+    if cleaned_radarr and cleaned_radarr in maps["title"]:
+        return maps["title"][cleaned_radarr]
 
     return None
 
@@ -164,12 +192,10 @@ def get_or_create_collection(name):
 
 
 # -----------------------------
-# ADD MOVIE TO COLLECTION (FIXED API ROUTE)
+# ADD MOVIE TO COLLECTION
 # -----------------------------
 def add_movie_to_collection(collection_id, movie_id):
     try:
-        # Jellyfin expects the item IDs as a comma-separated query parameter string,
-        # and the route is just '/Items', not '/Items/Add'.
         res = requests.post(
             f"{JELLYFIN_URL}/Collections/{collection_id}/Items",
             headers=jellyfin_headers(),
@@ -181,6 +207,26 @@ def add_movie_to_collection(collection_id, movie_id):
     except Exception as e:
         print("Add to collection error:", str(e))
         return False
+
+
+# -----------------------------
+# OPTIONAL: SET COLLECTION POSTER (HOOK)
+# -----------------------------
+def set_collection_poster(collection_id, image_url=None):
+    if not image_url:
+        return
+
+    try:
+        res = requests.post(
+            f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
+            headers=jellyfin_headers(),
+            json={"ImageUrl": image_url},
+            timeout=10
+        )
+        print(f"[POSTER] {res.status_code} {res.text}")
+    except Exception as e:
+        print("Poster error:", str(e))
+
 
 # -----------------------------
 # CORE LOGIC
@@ -223,7 +269,7 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
 
 
 # -----------------------------
-# RADARR WEBHOOK (CHANGED TO SYNC 'def')
+# RADARR WEBHOOK
 # -----------------------------
 @app.post("/radarr")
 def radarr_webhook(payload: dict):
@@ -236,7 +282,6 @@ def radarr_webhook(payload: dict):
     if not movie:
         return {"status": "ignored"}
 
-    # Optimization: Build small targeted map for this specific movie title
     radarr_tags = get_radarr_tags()
     jellyfin_maps = build_jellyfin_maps(search_term=movie.get("title"))
 
@@ -247,13 +292,12 @@ def radarr_webhook(payload: dict):
 
 
 # -----------------------------
-# FULLSCAN (CHANGED TO SYNC 'def')
+# FULLSCAN
 # -----------------------------
 @app.post("/fullscan")
 def fullscan():
     print("Starting full scan...")
 
-    # Pre-fetch and cache everything once
     radarr_tags = get_radarr_tags()
     jellyfin_maps = build_jellyfin_maps()
 
