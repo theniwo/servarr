@@ -80,7 +80,7 @@ def build_jellyfin_maps(search_term=None):
     params = {
         "Recursive": "true",
         "IncludeItemTypes": "Movie",
-        "Fields": "Path,ProviderIds,Name"
+        "Fields": "Path,ProviderIds,Name,OriginalTitle"
     }
     if search_term:
         params["SearchTerm"] = search_term
@@ -107,18 +107,24 @@ def build_jellyfin_maps(search_term=None):
         p_ids = item.get("ProviderIds", {})
         path = item.get("Path")
         name = item.get("Name")
+        orig_title = item.get("OriginalTitle")
 
-        if "Tmdb" in p_ids:
+        if "Tmdb" in p_ids and p_ids["Tmdb"]:
             tmdb_map[str(p_ids["Tmdb"])] = j_id
-        if "Imdb" in p_ids:
+        if "Imdb" in p_ids and p_ids["Imdb"]:
             imdb_map[str(p_ids["Imdb"])] = j_id
 
         if path:
             folder_name = os.path.basename(os.path.dirname(path)).lower()
             folder_map[folder_name] = j_id
 
+            file_name, _ = os.path.splitext(os.path.basename(path))
+            folder_map[file_name.lower()] = j_id
+
         if name:
             title_map[clean_title(name)] = j_id
+        if orig_title:
+            title_map[clean_title(orig_title)] = j_id
 
     return {
         "tmdb": tmdb_map,
@@ -140,18 +146,18 @@ def match_movie_to_jellyfin(movie, maps):
     if imdb_id and imdb_id in maps["imdb"]:
         return maps["imdb"][imdb_id]
 
-    # 3. Try matching by folder base name
+    # 3. Try matching by Cleaned Title (High priority fallback)
+    radarr_title = movie.get("title")
+    cleaned_radarr = clean_title(radarr_title)
+    if cleaned_radarr and cleaned_radarr in maps["title"]:
+        return maps["title"][cleaned_radarr]
+
+    # 4. Try matching by folder base name or file name
     movie_path = movie.get("folderName") or movie.get("path") or ""
     if movie_path:
         folder_name = os.path.basename(os.path.normpath(movie_path)).lower()
         if folder_name in maps["folder"]:
             return maps["folder"][folder_name]
-
-    # 4. Fallback: Loose Title Match (ignores punctuation, casing, dashes)
-    radarr_title = movie.get("title")
-    cleaned_radarr = clean_title(radarr_title)
-    if cleaned_radarr and cleaned_radarr in maps["title"]:
-        return maps["title"][cleaned_radarr]
 
     return None
 
@@ -194,7 +200,7 @@ def get_or_create_collection(name):
 # -----------------------------
 # ADD MOVIE TO COLLECTION
 # -----------------------------
-def add_movie_to_collection(collection_id, movie_id):
+def add_movie_to_collection(collection_id, movie_id, movie_title, collection_name):
     try:
         res = requests.post(
             f"{JELLYFIN_URL}/Collections/{collection_id}/Items",
@@ -202,10 +208,16 @@ def add_movie_to_collection(collection_id, movie_id):
             params={"Ids": movie_id},
             timeout=10
         )
-        print(f"[JELLYFIN ADD] {res.status_code} {res.text}")
-        return res.status_code in [200, 204]
+
+        if res.status_code in [200, 204]:
+            print(f"[JELLYFIN ADD] Successfully added \"{movie_title}\" to collection \"{collection_name}\" (Status: {res.status_code})")
+            return True
+        else:
+            print(f"[JELLYFIN ADD ERROR] Failed for \"{movie_title}\" to collection \"{collection_name}\" (Status: {res.status_code}) - {res.text}")
+            return False
+
     except Exception as e:
-        print("Add to collection error:", str(e))
+        print(f"Add to collection error for \"{movie_title}\" / \"{collection_name}\":", str(e))
         return False
 
 
@@ -245,15 +257,16 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
     ]
 
     movie_id = match_movie_to_jellyfin(movie, jellyfin_maps)
+    movie_title = movie.get("title")
 
     result = {
-        "movie": movie.get("title"),
+        "movie": movie_title,
         "movie_id": movie_id,
         "collections": []
     }
 
     if not movie_id:
-        print(f"[SKIP] Movie not found in Jellyfin: {movie.get('title')}")
+        print(f"[SKIP] Movie not found in Jellyfin: {movie_title}")
         return result
 
     for collection_name in collections:
@@ -261,7 +274,7 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
         if not collection_id:
             continue
 
-        ok = add_movie_to_collection(collection_id, movie_id)
+        ok = add_movie_to_collection(collection_id, movie_id, movie_title, collection_name)
         if ok:
             result["collections"].append(collection_name)
 
