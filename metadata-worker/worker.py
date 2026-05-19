@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import requests
 from fastapi import FastAPI, Request
 from dotenv import load_dotenv
@@ -73,10 +74,6 @@ def get_radarr_tags():
 # JELLYFIN MAP BUILDERS
 # -----------------------------
 def build_jellyfin_maps(search_term=None):
-    """
-    Fetches movies from Jellyfin and builds lookup maps for fast matching.
-    If search_term is provided, it narrows down the scope (used for single webhooks).
-    """
     params = {
         "Recursive": "true",
         "IncludeItemTypes": "Movie",
@@ -135,7 +132,6 @@ def build_jellyfin_maps(search_term=None):
 
 
 def match_movie_to_jellyfin(movie, maps):
-    """Matches a Radarr movie object against pre-built Jellyfin maps."""
     # 1. Try matching by TMDB ID
     tmdb_id = str(movie.get("tmdbId") or "")
     if tmdb_id and tmdb_id in maps["tmdb"]:
@@ -146,7 +142,7 @@ def match_movie_to_jellyfin(movie, maps):
     if imdb_id and imdb_id in maps["imdb"]:
         return maps["imdb"][imdb_id]
 
-    # 3. Try matching by Cleaned Title (High priority fallback)
+    # 3. Try matching by Cleaned Title
     radarr_title = movie.get("title")
     cleaned_radarr = clean_title(radarr_title)
     if cleaned_radarr and cleaned_radarr in maps["title"]:
@@ -222,25 +218,6 @@ def add_movie_to_collection(collection_id, movie_id, movie_title, collection_nam
 
 
 # -----------------------------
-# OPTIONAL: SET COLLECTION POSTER (HOOK)
-# -----------------------------
-def set_collection_poster(collection_id, image_url=None):
-    if not image_url:
-        return
-
-    try:
-        res = requests.post(
-            f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
-            headers=jellyfin_headers(),
-            json={"ImageUrl": image_url},
-            timeout=10
-        )
-        print(f"[POSTER] {res.status_code} {res.text}")
-    except Exception as e:
-        print("Poster error:", str(e))
-
-
-# -----------------------------
 # CORE LOGIC
 # -----------------------------
 def process_movie(movie, radarr_tags, jellyfin_maps):
@@ -282,7 +259,64 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
 
 
 # -----------------------------
-# RADARR WEBHOOK
+# JELLYFIN WEBHOOK (NEW)
+# -----------------------------
+@app.post("/jellyfin")
+def jellyfin_webhook(payload: dict):
+    event = payload.get("Event")
+
+    if event != "ItemAdded":
+        return {"status": "ignored", "event": event}
+
+    if payload.get("ItemType") != "Movie":
+        return {"status": "ignored", "item_type": payload.get("ItemType")}
+
+    movie_title = payload.get("Name")
+    print(f"[JELLYFIN WEBHOOK] New movie added to library: {movie_title}")
+
+    try:
+        # Fetch Radarr movies to get tags
+        res = requests.get(
+            f"{RADARR_URL}/api/v3/movie",
+            headers={"X-Api-Key": RADARR_KEY},
+            timeout=20
+        )
+        res.raise_for_status()
+
+        radarr_movie = None
+        jellyfin_tmdb = payload.get("ProviderIds", {}).get("Tmdb")
+        jellyfin_imdb = payload.get("ProviderIds", {}).get("Imdb")
+
+        for m in res.json():
+            if jellyfin_tmdb and str(m.get("tmdbId")) == str(jellyfin_tmdb):
+                radarr_movie = m
+                break
+            if jellyfin_imdb and str(m.get("imdbId")) == str(jellyfin_imdb):
+                radarr_movie = m
+                break
+            if clean_title(m.get("title")) == clean_title(movie_title):
+                radarr_movie = m
+                break
+
+        if not radarr_movie:
+            print(f"[SKIP] Movie \"{movie_title}\" not found in Radarr.")
+            return {"status": "not_found_in_radarr"}
+
+        radarr_tags = get_radarr_tags()
+        jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
+
+        return {
+            "status": "ok",
+            "processed": process_movie(radarr_movie, radarr_tags, jellyfin_maps)
+        }
+
+    except Exception as e:
+        print(f"Error processing Jellyfin webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+# -----------------------------
+# RADARR WEBHOOK (FALLBACK)
 # -----------------------------
 @app.post("/radarr")
 def radarr_webhook(payload: dict):
