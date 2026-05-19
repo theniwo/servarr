@@ -292,11 +292,18 @@ def generate_collection_collage(collection_id, collection_name):
 
         # Jellyfin expects a POST to /Images/Primary with the API Key also in the URL parameters
         # to guarantee authentication for multi-part/string payloads.
+		# -----------------------------
+        # FIXED UPLOAD SECTION
+        # -----------------------------
+        # Copy headers to avoid modifying global headers for other requests
+        upload_headers = jellyfin_headers().copy()
+        upload_headers["Content-Type"] = "image/jpeg"  # <-- Fix: Jellyfin tracks the MIME type via this header
+
         upload_res = requests.post(
             f"{JELLYFIN_URL}/Items/{collection_id}/Images/Primary",
-            headers=jellyfin_headers(),
-            params={"api_key": JELLYFIN_KEY},  # <-- Fix: Authenticate via URL parameter for image route
-            data=base64_encoded,                # <-- Fix: Send as plain Base64 string payload
+            headers=upload_headers,
+            params={"api_key": JELLYFIN_KEY},
+            data=base64_encoded,
             timeout=15
         )
 
