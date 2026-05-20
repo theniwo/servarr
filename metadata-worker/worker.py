@@ -437,24 +437,79 @@ async def jellyfin_webhook(request: Request):
 # RADARR WEBHOOK (FALLBACK)
 # -----------------------------
 @app.post("/radarr")
-def radarr_webhook(payload: dict):
-    event = payload.get("eventType")
+async def radarr_webhook(request: Request):
+    """
+    Handles Radarr webhooks for both importing (adding/upgrading)
+    and deleting movies to sync Jellyfin collections accordingly.
+    """
+    try:
+        payload = await request.json()
+    except Exception as e:
+        print(f"[RADARR ERROR] Failed to parse JSON: {e}")
+        return {"status": "error", "message": "Invalid JSON"}
 
-    if event == "Test":
-        return {"status": "ok", "message": "test received"}
+    event_type = payload.get("eventType")
+    movie_data = payload.get("movie", {})
+    movie_title = movie_data.get("title", "Unknown")
+    tmdb_id = str(movie_data.get("tmdbId", ""))
 
-    movie = payload.get("movie")
-    if not movie:
-        return {"status": "ignored"}
+    print(f"\n[RADARR TRIGGER] Event '{event_type}' received for: '{movie_title}'")
 
-    radarr_tags = get_radarr_tags()
-    jellyfin_maps = build_jellyfin_maps(search_term=movie.get("title"))
+    # --------------------------------------------------------
+    # FALL 1: FILM WURDE GELESCHT (Delete / MovieFileDelete)
+    # --------------------------------------------------------
+    if event_type in ["MovieDelete", "MovieFileDelete"]:
+        print(f"[DELETE] Movie '{movie_title}' was deleted from Radarr. Syncing Jellyfin...")
 
-    return {
-        "status": "ok",
-        "processed": process_movie(movie, radarr_tags, jellyfin_maps)
-    }
+        # 1. Trigger schnell einen Library Scan, damit Jellyfin merkt, dass die Datei weg ist
+        try:
+            requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers={"X-MediaBrowser-Token": JELLYFIN_KEY}, timeout=10)
+        except Exception as e:
+            print(f"[WARNING] Could not trigger Jellyfin scan: {e}")
 
+        # 2. Kurze Pause, damit Jellyfin die Datenbank bereinigt
+        time.sleep(3)
+
+        # 3. Maps neu bauen (der gelöschte Film sollte jetzt fehlen oder eine neue ID brauchen)
+        jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
+        radarr_tags = get_radarr_tags()
+
+        # 4. Prozessieren (deine process_movie Logik sollte erkennen, dass der Film weg ist
+        # und ihn aus den Collections werfen)
+        result = process_movie(movie_data, radarr_tags, jellyfin_maps)
+        return {"status": "ok", "action": "deleted", "result": result}
+
+    # --------------------------------------------------------
+    # FALL 2: FILM WURDE IMPORTIERT (Download / Upgrade)
+    # --------------------------------------------------------
+    elif event_type in ["Download", "Upgrade"]:
+        if not tmdb_id:
+            print("[SKIP] No TMDB ID provided by Radarr. Cannot sync.")
+            return {"status": "missing_tmdb_id"}
+
+        movie_folder = payload.get("movieFile", {}).get("relativePath", "") or movie_data.get("folderPath", "")
+        print(f"[JELLYFIN] Triggering targeted scan for folder: {movie_folder}")
+
+        try:
+            requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers={"X-MediaBrowser-Token": JELLYFIN_KEY}, timeout=10)
+        except Exception as e:
+            print(f"[WARNING] Could not trigger Jellyfin scan: {e}")
+
+        print("[WAIT] Sleeping 5 seconds to let Jellyfin index the file...")
+        time.sleep(5)
+
+        try:
+            radarr_tags = get_radarr_tags()
+            jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
+            result = process_movie(movie_data, radarr_tags, jellyfin_maps)
+            return {"status": "ok", "action": "imported", "result": result}
+        except Exception as e:
+            print(f"[ERROR] Failed to process collection for '{movie_title}': {e}")
+            return {"status": "error", "message": str(e)}
+
+    # Alle anderen Events (z.B. Test, Rename) ignorieren wir hier
+    else:
+        return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
 # -----------------------------
 # FULLSCAN (DYNAMIC RATE-LIMIT)
 # -----------------------------
