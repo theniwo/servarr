@@ -16,18 +16,29 @@ def migrate():
         print("[FEHLER] Keine 'radarr.db' im aktuellen Verzeichnis gefunden!")
         sys.exit(1)
 
+    # Variablen aus der Umgebung laden (gemäß MYSQL_ Standard)
+    db_host = os.getenv("MYSQL_HOST", "radarr-db")
+    db_port = int(os.getenv("MYSQL_PORT", "3306"))
+    db_user = os.getenv("MYSQL_USER", "radarr-user")
+    db_pass = os.getenv("MYSQL_PASSWORD")
+    db_name = os.getenv("MYSQL_DATABASE", "radarr-main")
+
+    if not db_pass:
+        print("[FEHLER] Keine 'MYSQL_PASSWORD' Umgebungsvariable übergeben!")
+        sys.exit(1)
+
     print("[SQLITE] Verbinde mit kaputter radarr.db...")
     src = sqlite3.connect('radarr.db')
     src_cursor = src.cursor()
 
-    print("[MARIADB] Verbinde mit MariaDB-Container...")
+    print(f"[MARIADB] Verbinde mit MariaDB ({db_host}:{db_port}/{db_name})...")
     try:
         dst = mysql.connector.connect(
-            host="radarr-db",  # Nutzt den Docker-Container-Namen als Host
-            port=3306,
-            user="radarr-user",
-            password="YourSecurePassword",
-            database="radarr-main"
+            host=db_host,
+            port=db_port,
+            user=db_user,
+            password=db_pass,
+            database=db_name
         )
         dst_cursor = dst.cursor()
     except Exception as e:
