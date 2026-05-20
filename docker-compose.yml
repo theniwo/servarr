@@ -461,6 +461,7 @@ services:
       - /cache/jellyfin:/cache
       #- /scratch/cache/jellyfin:/cache
       - media:/media
+      - media:/mnt/MEDIA
       # we use docker rclone plugin instead
       # - type: bind
       #   source: /mnt/MEDIA
@@ -770,8 +771,7 @@ services:
       - ./radarr-scripts:/scripts
       - /scratch/downloads:/data/downloads
       - radarr_config:/config
-      - data:/mnt/DATA
-      - media:/mnt/MEDIA
+      - media:/media
     networks:
       - default
       - apprise-net
@@ -1002,8 +1002,7 @@ services:
     volumes:
       - /scratch/downloads:/data/downloads
       - sonarr_config:/config
-      - data:/mnt/DATA
-      - media:/mnt/MEDIA
+      - media:/media
     networks:
       - default
       - apprise-net
