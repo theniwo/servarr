@@ -455,13 +455,17 @@ def radarr_webhook(payload: dict):
         "processed": process_movie(movie, radarr_tags, jellyfin_maps)
     }
 
-
 # -----------------------------
-# FULLSCAN
+# FULLSCAN (DYNAMIC RATE-LIMIT)
 # -----------------------------
 @app.post("/fullscan")
-def fullscan():
-    print("Starting full scan...")
+def fullscan(flood: bool = False):
+    """
+    Triggers a full scan of the Radarr database.
+    By default, it safely waits 2 seconds between movies to prevent TMDb/Trakt rate limits.
+    Append '?flood=true' to the URL to disable the delay.
+    """
+    print(f"Starting full scan (Flood-Mode: {flood})...")
 
     radarr_tags = get_radarr_tags()
     jellyfin_maps = build_jellyfin_maps()
@@ -474,10 +478,21 @@ def fullscan():
     res.raise_for_status()
 
     processed = []
-    for movie in res.json():
-        processed.append(process_movie(movie, radarr_tags, jellyfin_maps))
+    movies = res.json()
+    total_movies = len(movies)
+
+    for index, movie in enumerate(movies, start=1):
+        # Process the current movie
+        result = process_movie(movie, radarr_tags, jellyfin_maps)
+        processed.append(result)
+
+        # Safe-mode delay: Only sleep if flood is False AND it's not the last movie
+        if not flood and index < total_movies:
+            print(f"[{index}/{total_movies}] Safe-mode: Sleeping 2s to protect API limits...")
+            time.sleep(2)
 
     return {
         "status": "ok",
+        "flood_mode": flood,
         "processed": processed
     }
