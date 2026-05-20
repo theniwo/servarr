@@ -35,6 +35,8 @@ volumes:
   qbittorrent_config:
   qbittorrent_logs:
   radarr_config:
+  radarr-db_data:
+  radarr-db_backup:
   readarr_config:
   recyclarr_config:
   sabnzbd_config:
@@ -760,10 +762,58 @@ services:
       - "wud.watch.digest=true"
     profiles: ["downloader"]
 
-  radarr:
-    image: lscr.io/linuxserver/radarr:latest
+  radarr-db:
+    image: mariadb:10
+    command: --transaction-isolation=READ-COMMITTED --log-bin=mysqld-bin --binlog-format=ROW
+    restart: unless-stopped
     env_file:
       - ./global.env
+      - ./radarr-db.env
+      - ./radarr-db_root.env
+    volumes:
+      - radarr-db_data:/var/lib/mysql
+    healthcheck:
+      test: "exit 0"
+    labels:
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
+
+  radarr-db_backup:
+    #image: fradelg/mysql-cron-backup:1.4.0
+    image: fradelg/mysql-cron-backup
+    #mem_limit: 256M
+    restart: always
+    depends_on:
+      - radarr-db
+    env_file:
+      - ./global.env
+      - ./radarr-db.env
+    environment:
+      - MYSQLDUMP_OPTS=--single-transaction
+      - MAX_BACKUPS=15
+      - INIT_BACKUP=1
+      # Every day at 12:00
+      - CRON_TIME=0 12 * * *
+      # Make it small
+      - GZIP_LEVEL=9
+    volumes:
+      - radarr-db_backup:/backup
+      # docker container exec baikal_db_backup_1 ls /backup
+      # docker container exec baikal_db_backup_1 /restore.sh /backup/latest.baikal.sql.gz
+    healthcheck:
+      test: "exit 0"
+
+  radarr:
+    image: lscr.io/linuxserver/radarr:latest
+    depends_on:
+      radarr-db:
+        condition: service_started
+    env_file:
+      - ./global.env
+      - ./radarr.env
+      - ./radarr-db.env
+      - ./radarr-db_root.env
     environment:
       - PUID=1000
       - PGID=1000
