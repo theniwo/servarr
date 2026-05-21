@@ -576,14 +576,13 @@ async def radarr_webhook(request: Request):
         return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
 
 # -----------------------------
-# SINGLE MOVIE SYNC (FIXED TAGS)
+# SINGLE MOVIE SYNC (TYPE-SAFE)
 # -----------------------------
 @app.post("/sync/{radarr_movie_id}")
 def sync_single_movie(radarr_movie_id: int):
     print(f"Starting targeted sync for Radarr Movie ID: {radarr_movie_id}...")
 
     try:
-        # Wir holen alle Filme, da hier die Tags garantiert vollständig belegt sind
         res = requests.get(
             f"{RADARR_URL}/api/v3/movie",
             headers={"X-Api-Key": RADARR_KEY},
@@ -591,16 +590,20 @@ def sync_single_movie(radarr_movie_id: int):
         )
         res.raise_for_status()
 
-        # Den richtigen Film anhand der lokalen ID in Python herausfiltern
-        movie = next((m for m in res.json() if m.get("id") == radarr_movie_id), None)
+        # FIX: Wir casten beide IDs zu Strings, um Typen-Konflikte (Int vs String) zu vermeiden
+        movie = next(
+            (m for m in res.json() if str(m.get("id")) == str(radarr_movie_id)),
+            None
+        )
 
         if not movie:
+            print(f"[ERROR] Movie ID {radarr_movie_id} truly not found in Radarr response.")
             return {"status": "error", "message": f"Movie with ID {radarr_movie_id} not found in Radarr."}
 
         print(f"[SYNC] Processing verified movie from Radarr: '{movie.get('title')}'")
 
         radarr_tags = get_radarr_tags()
-        jellyfin_maps = build_jellyfin_maps()  # Ohne Suchbegriff, um Falschmatches zu verhindern
+        jellyfin_maps = build_jellyfin_maps()
 
         result = process_movie(movie, radarr_tags, jellyfin_maps)
         return {"status": "ok", "processed": result}
