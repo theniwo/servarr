@@ -498,32 +498,33 @@ async def radarr_webhook(request: Request):
             print("[SKIP] No TMDB ID provided by Radarr. Cannot sync.")
             return {"status": "missing_tmdb_id"}
 
-        movie_path = movie_data.get("folderPath", "")
-        print(f"[JELLYFIN] Triggering TARGETED scan for folder: {movie_path}")
+        # TODO: Ersetze diese ID mit der soeben ausgelesenen ItemId deiner Film-Bibliothek!
+        JELLYFIN_MOVIES_LIBRARY_ID = os.getenv("JELLYFIN_MOVIES_LIBRARY_ID", "DEINE_GEFUNDENE_LIBRARY_ID")
 
-        # Targeted library item scan instead of global full-scan
+        print(f"[JELLYFIN] Triggering TARGETED library refresh for Movie Library ID: {JELLYFIN_MOVIES_LIBRARY_ID}")
+
+        # Targeted library item scan instead of global full-scan or path-mapping dependent scan
         try:
             requests.post(
-                f"{JELLYFIN_URL}/Library/Media/Refresh",
+                f"{JELLYFIN_URL}/Items/{JELLYFIN_MOVIES_LIBRARY_ID}/Refresh",
                 headers=jellyfin_headers(),
-                json={
-                    "path": movie_path,
+                params={
+                    "Recursive": "true",
                     "ImageRefreshMode": "Default",
                     "MetadataRefreshMode": "Default",
-                    "ReplaceAllImages": False,
-                    "ReplaceAllMetadata": False
+                    "ReplaceAllImages": "false",
+                    "ReplaceAllMetadata": "false"
                 },
                 timeout=10
             )
         except Exception as e:
-            print(f"[WARNING] Could not trigger targeted Jellyfin scan: {e}")
+            print(f"[WARNING] Could not trigger targeted Jellyfin library scan: {e}")
 
         print("[WAIT] Polling Jellyfin until movie is indexed and maps are ready...")
 
         jellyfin_maps = None
         movie_found = False
 
-        # Loop for up to 45 seconds polling every 3 seconds
         for attempt in range(15):
             try:
                 jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
