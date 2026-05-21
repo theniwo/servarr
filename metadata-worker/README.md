@@ -128,7 +128,22 @@ Item Type: Movie
 
 Hook Events: Check Item Added.
 
+## Running a Full Scan
 
+The `/fullscan` endpoint allows you to manually trigger a complete synchronization of your entire Radarr database to Jellyfin. This is useful for initial setups or after altering tag mappings.
+
+### 1. Standard Mode (Safe Mode)
+By default, the worker pauses for **2 seconds between each movie**. This prevents hardware overhead and protects your system from hitting external API rate limits (e.g., TMDb or Trakt).
+
+```bash
+curl -X POST "http://YOUR-WORKER-IP:8000/fullscan"
+```
+### 2. Flood Mode (Fast Mode)
+This mode disables the 2-second delay entirely. The worker will process your entire Radarr database as fast as possible in a single run. Use this if you want a rapid initial sync and have a smaller database.
+
+```bash
+curl -X POST "http://YOUR-WORKER-IP:8000/fullscan?flood=true"
+```
 
 ## API Endpoints
 POST /radarr - Handles incoming Radarr notifications (triggers the targeted scan and starts polling).
