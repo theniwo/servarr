@@ -407,14 +407,14 @@ async def jellyfin_webhook(request: Request):
         jellyfin_title_clean = re.sub(r'\s*\(\d{4}\)\s*$', '', jellyfin_name)
         cleaned_jellyfin_title = clean_title(jellyfin_title_clean)
 
-        # MATCHING LOGIC (STRICT ID -> FALLBACK TO NAME + YEAR)
+        # MATCHING LOGIC (ID MATCH -> FALLBACK TO TITLE + YEAR)
         for m in res.json():
             radarr_tmdb = str(m.get("tmdbId", "")).strip()
             radarr_imdb = str(m.get("imdbId", "")).strip()
             radarr_title = m.get("title", "")
-            radarr_year = m.get("year")
+            radarr_year = str(m.get("year", ""))
 
-            # 1. Attempt ID Match
+            # 1. Attempt ID Match (only if Jellyfin actually provided IDs)
             if jellyfin_tmdb and radarr_tmdb == jellyfin_tmdb:
                 radarr_movie = m
                 break
@@ -422,13 +422,11 @@ async def jellyfin_webhook(request: Request):
                 radarr_movie = m
                 break
 
-            # 2. Fallback: Clean Title + Year Match if Jellyfin sent no IDs
-            if not jellyfin_tmdb and not jellyfin_imdb:
-                if clean_title(radarr_title) == cleaned_jellyfin_title and str(radarr_year) == str(jellyfin_year):
-                    print(f"[FALLBACK MATCH] Found loose match via title/year for '{jellyfin_name}' ({jellyfin_year})")
-                    radarr_movie = m
-                    break
-
+            # 2. Fallback: Clean Title + Year Match (if IDs didn't match or were missing)
+            if clean_title(radarr_title) == cleaned_jellyfin_title and radarr_year == str(jellyfin_year):
+                print(f"[FALLBACK MATCH] Found loose match via title/year for '{jellyfin_name}' ({jellyfin_year})")
+                radarr_movie = m
+                break
         if not radarr_movie:
             print(f"[SKIP] No movie found in Radarr matching IDs or Title/Year fallback for '{jellyfin_name}'")
             return {"status": "not_found_in_radarr"}
