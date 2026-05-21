@@ -137,6 +137,9 @@ def build_jellyfin_maps(search_term=None):
 
 
 def match_movie_to_jellyfin(movie, maps):
+    if not maps:
+        return None
+
     # 1. Try matching by TMDB ID
     tmdb_id = str(movie.get("tmdbId") or "")
     if tmdb_id and tmdb_id in maps["tmdb"]:
@@ -474,21 +477,16 @@ async def radarr_webhook(request: Request):
     if event_type in ["MovieDelete", "MovieFileDelete"]:
         print(f"[DELETE] Movie '{movie_title}' was deleted from Radarr. Syncing Jellyfin...")
 
-        # 1. Trigger schnell einen Library Scan, damit Jellyfin merkt, dass die Datei weg ist
         try:
             requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers={"X-MediaBrowser-Token": JELLYFIN_KEY}, timeout=10)
         except Exception as e:
             print(f"[WARNING] Could not trigger Jellyfin scan: {e}")
 
-        # 2. Kurze Pause, damit Jellyfin die Datenbank bereinigt
         time.sleep(3)
 
-        # 3. Maps neu bauen (der gelöschte Film sollte jetzt fehlen oder eine neue ID brauchen)
         jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
         radarr_tags = get_radarr_tags()
 
-        # 4. Prozessieren (deine process_movie Logik sollte erkennen, dass der Film weg ist
-        # und ihn aus den Collections werfen)
         result = process_movie(movie_data, radarr_tags, jellyfin_maps)
         return {"status": "ok", "action": "deleted", "result": result}
 
@@ -500,27 +498,55 @@ async def radarr_webhook(request: Request):
             print("[SKIP] No TMDB ID provided by Radarr. Cannot sync.")
             return {"status": "missing_tmdb_id"}
 
-        movie_folder = payload.get("movieFile", {}).get("relativePath", "") or movie_data.get("folderPath", "")
-        print(f"[JELLYFIN] Triggering targeted scan for folder: {movie_folder}")
+        movie_path = movie_data.get("folderPath", "")
+        print(f"[JELLYFIN] Triggering TARGETED scan for folder: {movie_path}")
 
+        # Targeted library item scan instead of global full-scan
         try:
-            requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers={"X-MediaBrowser-Token": JELLYFIN_KEY}, timeout=10)
+            requests.post(
+                f"{JELLYFIN_URL}/Library/Media/Refresh",
+                headers=jellyfin_headers(),
+                json={
+                    "path": movie_path,
+                    "ImageRefreshMode": "Default",
+                    "MetadataRefreshMode": "Default",
+                    "ReplaceAllImages": False,
+                    "ReplaceAllMetadata": False
+                },
+                timeout=10
+            )
         except Exception as e:
-            print(f"[WARNING] Could not trigger Jellyfin scan: {e}")
+            print(f"[WARNING] Could not trigger targeted Jellyfin scan: {e}")
 
-        print("[WAIT] Sleeping 5 seconds to let Jellyfin index the file...")
-        time.sleep(5)
+        print("[WAIT] Polling Jellyfin until movie is indexed and maps are ready...")
+
+        jellyfin_maps = None
+        movie_found = False
+
+        # Loop for up to 45 seconds polling every 3 seconds
+        for attempt in range(15):
+            try:
+                jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
+                if match_movie_to_jellyfin(movie_data, jellyfin_maps):
+                    movie_found = True
+                    print(f"[SUCCESS] Jellyfin indexed '{movie_title}' after {attempt * 3} seconds.")
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
+
+        if not movie_found:
+            print(f"[WARN] Jellyfin indexing timed out for '{movie_title}' after 45s. Forcing processing anyway.")
+            jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
 
         try:
             radarr_tags = get_radarr_tags()
-            jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
             result = process_movie(movie_data, radarr_tags, jellyfin_maps)
             return {"status": "ok", "action": "imported", "result": result}
         except Exception as e:
             print(f"[ERROR] Failed to process collection for '{movie_title}': {e}")
             return {"status": "error", "message": str(e)}
 
-    # Alle anderen Events (z.B. Test, Rename) ignorieren wir hier
     else:
         return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
 
@@ -552,11 +578,9 @@ def fullscan(flood: bool = False):
     total_movies = len(movies)
 
     for index, movie in enumerate(movies, start=1):
-        # Process the current movie
         result = process_movie(movie, radarr_tags, jellyfin_maps)
         processed.append(result)
 
-        # Safe-mode delay: Only sleep if flood is False AND it's not the last movie
         if not flood and index < total_movies:
             print(f"[{index}/{total_movies}] Safe-mode: Sleeping 2s to protect API limits...")
             time.sleep(2)
