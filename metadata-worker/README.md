@@ -64,21 +64,13 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies needed for Pillow/imaging if necessary
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install them
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the application source code
-COPY main.py .
+COPY . .
 
-EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8787"]
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
 ### 2. Create a requirements.txt
@@ -103,7 +95,7 @@ Run the container using environment variables from your `.env` file:
 ```
 docker run -d \
   --name jellyfin-radarr-sync \
-  -p 8000:8000 \
+  -p 8787:8787 \
   --env-file .env \
   --restart unless-stopped \
   jellyfin-radarr-sync:latest
@@ -130,7 +122,7 @@ Install the Webhook plugin from the official Jellyfin repository if you haven't 
 
 Go to the Dashboard -> Webhooks -> Add Webhook.
 
-Server URL: http://YOUR-WORKER-IP:8000/jellyfin
+Server URL: http://YOUR-WORKER-IP:8096/jellyfin
 
 Item Type: Movie
 
