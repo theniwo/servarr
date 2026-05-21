@@ -422,16 +422,28 @@ async def jellyfin_webhook(request: Request):
                 radarr_movie = m
                 break
 
-            # 2. Fallback: Clean Title + Year Match (with verbose logging on mismatch)
+            # 2. Fallback: Clean Title Match
             cleaned_radarr_title = clean_title(radarr_title)
             if cleaned_radarr_title == cleaned_jellyfin_title:
-                # Titel stimmt, aber stimmt das Jahr?
-                if radarr_year == str(jellyfin_year).strip():
-                    print(f"[FALLBACK MATCH] Found loose match via title/year for '{jellyfin_name}' ({jellyfin_year})")
+                jelly_year_str = str(jellyfin_year or "").strip()
+
+                # Wenn Jellyfin ein Jahr liefert, muss es stimmen. Wenn nicht (None/Empty), matchen wir rein über den Titel.
+                if not jelly_year_str or jelly_year_str == "None" or radarr_year == jelly_year_str:
+                    print(f"[FALLBACK MATCH] Found loose match via title for '{jellyfin_name}' (Radarr Year: {radarr_year})")
                     radarr_movie = m
                     break
                 else:
                     print(f"[FALLBACK MISMATCH] Title matched '{radarr_title}', but Year differed (Radarr: {radarr_year} vs Jellyfin: {jellyfin_year})")
+
+        if not radarr_movie:
+            print(f"[SKIP] No movie found in Radarr matching IDs or Title fallback for '{jellyfin_name}'")
+            return {"status": "not_found_in_radarr"}
+
+        print(f"[MATCH SUCCESS] Resolved '{jellyfin_name}' to Radarr Movie: '{radarr_movie.get('title')}'")
+
+        # Dynamic search in Jellyfin map based on the clean Radarr title
+        radarr_tags = get_radarr_tags()
+        jellyfin_maps = build_jellyfin_maps(search_term=radarr_movie.get("title"))
 
         print(f"[MATCH SUCCESS] Resolved '{jellyfin_name}' to Radarr Movie: '{radarr_movie.get('title')}'")
 
