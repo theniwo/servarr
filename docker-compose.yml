@@ -844,8 +844,8 @@ services:
       # cd /var/lib/docker/volumes/servarr_abr-db_backup/_data/
       # mkdir daily weekly monthly last
       # chmod 777 *
-      # docker container exec servarr-abr-db_backup-1 ls /backups/last
-      # docker container exec servarr-abr-db_backup-1 /backup.sh
+      # docker container exec servarr-radarr-db_backup-1 ls /backups/last
+      # docker container exec servarr-radarr-db_backup-1 /backup.sh
       # Restore:
       # Take Containers down and close all apps that could sync
       # docker compose down abr-db_backup && docker volume rm servarr_abr_postgres-data
