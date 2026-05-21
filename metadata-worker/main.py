@@ -577,8 +577,36 @@ async def radarr_webhook(request: Request):
 
 
 # -----------------------------
-# FULLSCAN
+# SINGLE MOVIE SYNC
 # -----------------------------
+@app.post("/sync/{radarr_movie_id}")
+def sync_single_movie(radarr_movie_id: int):
+    print(f"Starting targeted sync for Radarr Movie ID: {radarr_movie_id}...")
+
+    try:
+        # Holt den spezifischen Film direkt aus der Radarr-API
+        res = requests.get(
+            f"{RADARR_URL}/api/v3/movie/{radarr_movie_id}",
+            headers={"X-Api-Key": RADARR_KEY},
+            timeout=10
+        )
+
+        if res.status_code == 404:
+            return {"status": "error", "message": f"Movie with ID {radarr_movie_id} not found in Radarr."}
+        res.raise_for_status()
+        movie = res.json()
+
+        radarr_tags = get_radarr_tags()
+        # Wir suchen gezielt nach dem Filmtitel in Jellyfin, um Zeit zu sparen
+        jellyfin_maps = build_jellyfin_maps(search_term=movie.get("title"))
+
+        result = process_movie(movie, radarr_tags, jellyfin_maps)
+        return {"status": "ok", "processed": result}
+
+    except Exception as e:
+        print(f"[ERROR] Failed targeted sync for ID {radarr_movie_id}: {e}")
+        return {"status": "error", "message": str(e)}
+
 # -----------------------------
 # FULLSCAN
 # -----------------------------
