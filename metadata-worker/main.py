@@ -576,11 +576,11 @@ async def radarr_webhook(request: Request):
         return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
 
 # -----------------------------
-# SINGLE MOVIE SYNC (TYPE-SAFE)
+# SINGLE MOVIE SYNC (SMART ID MATCH & CLEANUP FIX)
 # -----------------------------
 @app.post("/sync/{radarr_movie_id}")
 def sync_single_movie(radarr_movie_id: int):
-    print(f"Starting targeted sync for Radarr Movie ID: {radarr_movie_id}...")
+    print(f"Starting targeted sync for Radarr Movie ID / TMDB ID: {radarr_movie_id}...")
 
     try:
         res = requests.get(
@@ -589,23 +589,65 @@ def sync_single_movie(radarr_movie_id: int):
             timeout=20
         )
         res.raise_for_status()
+        movies = res.json()
 
-        # FIX: Wir casten beide IDs zu Strings, um Typen-Konflikte (Int vs String) zu vermeiden
+        # Sucht entweder nach der internen Radarr-ID ODER der TMDB-ID
         movie = next(
-            (m for m in res.json() if str(m.get("id")) == str(radarr_movie_id)),
+            (m for m in movies if str(m.get("id")) == str(radarr_movie_id) or str(m.get("tmdbId")) == str(radarr_movie_id)),
             None
         )
 
         if not movie:
-            print(f"[ERROR] Movie ID {radarr_movie_id} truly not found in Radarr response.")
-            return {"status": "error", "message": f"Movie with ID {radarr_movie_id} not found in Radarr."}
+            return {"status": "error", "message": f"Movie with ID {radarr_movie_id} not found in Radarr (checked internal and TMDB IDs)."}
 
-        print(f"[SYNC] Processing verified movie from Radarr: '{movie.get('title')}'")
+        print(f"[SYNC] Processing movie: '{movie.get('title')}' (Internal ID: {movie.get('id')} | TMDB: {movie.get('tmdbId')})")
 
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps()
 
-        result = process_movie(movie, radarr_tags, jellyfin_maps)
+        # --- OPTIMIERTE LÖSCH-LOGIK NUR FÜR DIESEN ENDPUNKT ---
+        tag_names = [radarr_tags[t].lower().strip() for t in movie.get("tags", []) if t in radarr_tags]
+        active_collections = [collection_map[t] for t in tag_names if t in collection_map]
+
+        movie_id = match_movie_to_jellyfin(movie, jellyfin_maps)
+        movie_title = movie.get("title")
+
+        result = {"movie": movie_title, "movie_id": movie_id, "added_to": [], "removed_from": []}
+
+        if not movie_id:
+            print(f"[SKIP] Movie not found in Jellyfin: {movie_title}")
+            return {"status": "ok", "processed": result}
+
+        # 1. Hinzufügen (erstellt Kollektion falls nötig)
+        for collection_name in active_collections:
+            collection_id = get_or_create_collection(collection_name)
+            if collection_id and add_movie_to_collection(collection_id, movie_id, movie_title, collection_name):
+                result["added_to"].append(collection_name)
+                generate_collection_collage(collection_id, collection_name)
+
+        # 2. Entfernen (Sucht nur, erstellt NIEMALS neue Kollektionen)
+        for tag_key, collection_name in collection_map.items():
+            if collection_name not in active_collections:
+                # REINE ABFRAGE: Existiert die Kollektion überhaupt in Jellyfin?
+                check_res = requests.get(
+                    f"{JELLYFIN_URL}/Items",
+                    headers=jellyfin_headers(),
+                    params={"Recursive": "true", "IncludeItemTypes": "BoxSet", "SearchTerm": collection_name},
+                    timeout=10
+                )
+                collection_id = None
+                if check_res.status_code == 200:
+                    for item in check_res.json().get("Items", []):
+                        if item["Name"].lower() == collection_name.lower():
+                            collection_id = item["Id"]
+                            break
+
+                # Nur löschen, wenn die Kollektion auch real existiert
+                if collection_id:
+                    if remove_movie_from_collection(collection_id, movie_id, movie_title, collection_name):
+                        result["removed_from"].append(collection_name)
+                        generate_collection_collage(collection_id, collection_name)
+
         return {"status": "ok", "processed": result}
 
     except Exception as e:
