@@ -347,11 +347,11 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
 
 
 # -----------------------------
-# JELLYFIN WEBHOOK (ID-BASED MATCHING)
+# JELLYFIN WEBHOOK (ID-BASED WITH NAME FALLBACK)
 # -----------------------------
 @app.post("/jellyfin")
 async def jellyfin_webhook(request: Request):
-    """Handles Jellyfin webhooks by matching strictly via TMDB/IMDb IDs to avoid naming issues."""
+    """Handles Jellyfin webhooks by matching via IDs or fallback to cleaned name and year."""
     try:
         body_bytes = await request.body()
         body_str = body_bytes.decode("utf-8").strip()
@@ -376,6 +376,7 @@ async def jellyfin_webhook(request: Request):
 
     # Log what Jellyfin sent us
     jellyfin_name = payload.get("Name", "Unknown")
+    jellyfin_year = payload.get("Year")
     provider_ids = payload.get("ProviderIds") or {}
 
     def clean_id(val):
@@ -388,12 +389,8 @@ async def jellyfin_webhook(request: Request):
 
     print(f"[JELLYFIN WEBHOOK] Processing '{jellyfin_name}' (TMDB: {jellyfin_tmdb} | IMDB: {jellyfin_imdb})")
 
-    if not jellyfin_tmdb and not jellyfin_imdb:
-        print(f"[SKIP] Jellyfin sent no valid IDs for '{jellyfin_name}'. Cannot match reliably.")
-        return {"status": "missing_ids_in_webhook"}
-
     try:
-        # Fetch all movies from Radarr to cross-reference the IDs
+        # Fetch all movies from Radarr to cross-reference
         res = requests.get(
             f"{RADARR_URL}/api/v3/movie",
             headers={"X-Api-Key": RADARR_KEY},
@@ -403,11 +400,18 @@ async def jellyfin_webhook(request: Request):
 
         radarr_movie = None
 
-        # STRICT ID MATCHING
+        # Strip string-appended years like "Movie Name (2024)" down to "Movie Name"
+        jellyfin_title_clean = re.sub(r'\s*\(\d{4}\)\s*$', '', jellyfin_name)
+        cleaned_jellyfin_title = clean_title(jellyfin_title_clean)
+
+        # MATCHING LOGIC (STRICT ID -> FALLBACK TO NAME + YEAR)
         for m in res.json():
             radarr_tmdb = str(m.get("tmdbId", "")).strip()
             radarr_imdb = str(m.get("imdbId", "")).strip()
+            radarr_title = m.get("title", "")
+            radarr_year = m.get("year")
 
+            # 1. Attempt ID Match
             if jellyfin_tmdb and radarr_tmdb == jellyfin_tmdb:
                 radarr_movie = m
                 break
@@ -415,8 +419,15 @@ async def jellyfin_webhook(request: Request):
                 radarr_movie = m
                 break
 
+            # 2. Fallback: Clean Title + Year Match if Jellyfin sent no IDs
+            if not jellyfin_tmdb and not jellyfin_imdb:
+                if clean_title(radarr_title) == cleaned_jellyfin_title and str(radarr_year) == str(jellyfin_year):
+                    print(f"[FALLBACK MATCH] Found loose match via title/year for '{jellyfin_name}' ({jellyfin_year})")
+                    radarr_movie = m
+                    break
+
         if not radarr_movie:
-            print(f"[SKIP] No movie found in Radarr matching TMDB:{jellyfin_tmdb} or IMDB:{jellyfin_imdb}")
+            print(f"[SKIP] No movie found in Radarr matching IDs or Title/Year fallback for '{jellyfin_name}'")
             return {"status": "not_found_in_radarr"}
 
         print(f"[MATCH SUCCESS] Resolved '{jellyfin_name}' to Radarr Movie: '{radarr_movie.get('title')}'")
@@ -433,6 +444,7 @@ async def jellyfin_webhook(request: Request):
     except Exception as e:
         print(f"Error processing Jellyfin webhook: {e}")
         return {"status": "error", "message": str(e)}
+
 
 # -----------------------------
 # RADARR WEBHOOK (FALLBACK)
@@ -511,6 +523,8 @@ async def radarr_webhook(request: Request):
     # Alle anderen Events (z.B. Test, Rename) ignorieren wir hier
     else:
         return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
+
+
 # -----------------------------
 # FULLSCAN (DYNAMIC RATE-LIMIT)
 # -----------------------------
