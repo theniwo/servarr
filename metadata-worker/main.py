@@ -579,6 +579,9 @@ async def radarr_webhook(request: Request):
 # -----------------------------
 # FULLSCAN
 # -----------------------------
+# -----------------------------
+# FULLSCAN
+# -----------------------------
 @app.post("/fullscan")
 def fullscan(flood: bool = False):
     print(f"Starting full scan (Flood-Mode: {flood})...")
@@ -601,10 +604,11 @@ def fullscan(flood: bool = False):
         result = process_movie(movie, radarr_tags, jellyfin_maps)
         processed.append(result)
 
+        # Die Log-Zeile wurde entfernt. Es wird im Safe-Modus nur noch still gewartet.
         if not flood and index < total_movies:
-            print(f"[{index}/{total_movies}] Safe-mode: Sleeping 2s to protect API limits...")
             time.sleep(2)
 
+    print(f"Full scan completed. Processed {total_movies} movies.")
     return {
         "status": "ok",
         "flood_mode": flood,
