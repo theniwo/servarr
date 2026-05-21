@@ -7,6 +7,7 @@ import json
 import base64
 import time
 from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from PIL import Image as PILImage
 
@@ -668,47 +669,46 @@ def sync_single_movie(radarr_movie_id: int):
         return {"status": "error", "message": str(e)}
 
 # -----------------------------
-# FULLSCAN (WITH INLINE PROGRESS BAR)
+# STREAMED FULLSCAN
 # -----------------------------
 @app.post("/fullscan")
 def fullscan(flood: bool = False):
     print(f"Starting full scan (Flood-Mode: {flood})...")
 
-    radarr_tags = get_radarr_tags()
-    jellyfin_maps = build_jellyfin_maps()
+    def progress_generator():
+        radarr_tags = get_radarr_tags()
+        jellyfin_maps = build_jellyfin_maps()
 
-    res = requests.get(
-        f"{RADARR_URL}/api/v3/movie",
-        headers={"X-Api-Key": RADARR_KEY},
-        timeout=20
-    )
-    res.raise_for_status()
+        res = requests.get(
+            f"{RADARR_URL}/api/v3/movie",
+            headers={"X-Api-Key": RADARR_KEY},
+            timeout=20
+        )
+        res.raise_for_status()
 
-    processed = []
-    movies = res.json()
-    total_movies = len(movies)
+        movies = res.json()
+        total_movies = len(movies)
 
-    for index, movie in enumerate(movies, start=1):
-        # Nutzt die sichere Fullscan-Logik ohne Lösch-Aktionen
-        result = process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
-        processed.append(result)
+        yield f"Starting full scan of {total_movies} movies...\n"
 
-        # Fortschrittsbalken berechnen (Länge: 20 Zeichen)
-        percent = (index / total_movies) * 100
-        bar_length = 20
-        filled_length = int(bar_length * index // total_movies)
-        bar = '█' * filled_length + '-' * (bar_length - filled_length)
+        for index, movie in enumerate(movies, start=1):
+            result = process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
 
-        # \r sorgt dafür, dass die Zeile im Terminal immer wieder überschrieben wird
-        print(f"\rProgress: |{bar}| {index}/{total_movies} Movies ({percent:.1f}%)", end="", flush=True)
+            # Falls etwas hinzugefügt wurde, streamen wir das sofort zum Client
+            if result["added_to"]:
+                yield f"[ADD] '{result['movie']}' -> {result['added_to']}\n"
 
-        if not flood and index < total_movies:
-            time.sleep(2)
+            # Der Fortschrittsbalken wird mit \r an curl gesendet
+            percent = (index / total_movies) * 100
+            bar_length = 20
+            filled_length = int(bar_length * index // total_movies)
+            bar = '█' * filled_length + '-' * (bar_length - filled_length)
 
-    # Nach Abschluss einen Zeilenumbruch setzen, damit nachfolgende Logs nicht in der gleichen Zeile landen
-    print(f"\nFull scan completed. Processed {total_movies} movies.")
-    return {
-        "status": "ok",
-        "flood_mode": flood,
-        "processed": processed
-    }
+            yield f"\rProgress: |{bar}| {index}/{total_movies} Movies ({percent:.1f}%)"
+
+            if not flood and index < total_movies:
+                time.sleep(2)
+
+        yield "\nFull scan completed successfully.\n"
+
+    return StreamingResponse(progress_generator(), media_type="text/plain")
