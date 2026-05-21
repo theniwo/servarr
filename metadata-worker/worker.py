@@ -427,7 +427,7 @@ async def jellyfin_webhook(request: Request):
             if cleaned_radarr_title == cleaned_jellyfin_title:
                 jelly_year_str = str(jellyfin_year or "").strip()
 
-                # Wenn Jellyfin ein Jahr liefert, muss es stimmen. Wenn nicht (None/Empty), matchen wir rein über den Titel.
+                # If Jellyfin supplies a year, it must match. If it's missing/None, fallback to title match alone.
                 if not jelly_year_str or jelly_year_str == "None" or radarr_year == jelly_year_str:
                     print(f"[FALLBACK MATCH] Found loose match via title for '{jellyfin_name}' (Radarr Year: {radarr_year})")
                     radarr_movie = m
@@ -442,12 +442,6 @@ async def jellyfin_webhook(request: Request):
         print(f"[MATCH SUCCESS] Resolved '{jellyfin_name}' to Radarr Movie: '{radarr_movie.get('title')}'")
 
         # Dynamic search in Jellyfin map based on the clean Radarr title
-        radarr_tags = get_radarr_tags()
-        jellyfin_maps = build_jellyfin_maps(search_term=radarr_movie.get("title"))
-
-        print(f"[MATCH SUCCESS] Resolved '{jellyfin_name}' to Radarr Movie: '{radarr_movie.get('title')}'")
-
-        # Dynamic search in Jellyfin map based on the clean Radarr title to find the correct Jellyfin Item ID
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps(search_term=radarr_movie.get("title"))
 
@@ -510,12 +504,10 @@ async def radarr_webhook(request: Request):
             print("[SKIP] No TMDB ID provided by Radarr. Cannot sync.")
             return {"status": "missing_tmdb_id"}
 
-        # TODO: Ersetze diese ID mit der soeben ausgelesenen ItemId deiner Film-Bibliothek!
-        JELLYFIN_MOVIES_LIBRARY_ID = os.getenv("JELLYFIN_MOVIES_LIBRARY_ID", "DEINE_GEFUNDENE_LIBRARY_ID")
-
+        JELLYFIN_MOVIES_LIBRARY_ID = os.getenv("JELLYFIN_MOVIES_LIBRARY_ID", "f137a2dd21bbc1b99aa5c0f6bf02a805")
         print(f"[JELLYFIN] Triggering TARGETED library refresh for Movie Library ID: {JELLYFIN_MOVIES_LIBRARY_ID}")
 
-        # Targeted library item scan instead of global full-scan or path-mapping dependent scan
+        # Targeted library item scan using the dynamic virtual folder ItemId
         try:
             requests.post(
                 f"{JELLYFIN_URL}/Items/{JELLYFIN_MOVIES_LIBRARY_ID}/Refresh",
@@ -537,6 +529,7 @@ async def radarr_webhook(request: Request):
         jellyfin_maps = None
         movie_found = False
 
+        # Loop for up to 45 seconds polling every 3 seconds
         for attempt in range(15):
             try:
                 jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
