@@ -575,16 +575,14 @@ async def radarr_webhook(request: Request):
     else:
         return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
 
-
 # -----------------------------
-# SINGLE MOVIE SYNC (FIXED)
+# SINGLE MOVIE SYNC (SAFE MATCH)
 # -----------------------------
 @app.post("/sync/{radarr_movie_id}")
 def sync_single_movie(radarr_movie_id: int):
     print(f"Starting targeted sync for Radarr Movie ID: {radarr_movie_id}...")
 
     try:
-        # Radarr V3 erwartet die ID als Query-Parameter, nicht im Pfad
         res = requests.get(
             f"{RADARR_URL}/api/v3/movie",
             headers={"X-Api-Key": RADARR_KEY},
@@ -592,19 +590,18 @@ def sync_single_movie(radarr_movie_id: int):
             timeout=10
         )
 
-        # Radarr gibt eine leere Liste oder 404 zurück, wenn die ID nicht existiert
         if res.status_code == 404 or not res.json():
             return {"status": "error", "message": f"Movie with ID {radarr_movie_id} not found in Radarr."}
 
         res.raise_for_status()
-
-        # Da Radarr auch bei einer ID-Abfrage eine Liste zurückgeben kann,
-        # nehmen wir das erste Element.
         movie_data = res.json()
         movie = movie_data[0] if isinstance(movie_data, list) else movie_data
 
         radarr_tags = get_radarr_tags()
-        jellyfin_maps = build_jellyfin_maps(search_term=movie.get("title"))
+
+        # FIX: Kein search_term mehr! Wir bauen die Map sauber auf,
+        # damit der match_movie_to_jellyfin Logik-Block fehlerfrei arbeiten kann.
+        jellyfin_maps = build_jellyfin_maps()
 
         result = process_movie(movie, radarr_tags, jellyfin_maps)
         return {"status": "ok", "processed": result}
