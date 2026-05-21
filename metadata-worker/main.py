@@ -213,7 +213,8 @@ def add_movie_to_collection(collection_id, movie_id, movie_title, collection_nam
         )
 
         if res.status_code in [200, 204]:
-            print(f"[JELLYFIN ADD] Successfully added \"{movie_title}\" to collection \"{collection_name}\" (Status: {res.status_code})")
+            # Status-Code entfernt für ein saubereres Log
+            print(f"[JELLYFIN ADD] Successfully added \"{movie_title}\" to collection \"{collection_name}\"")
             return True
         else:
             print(f"[JELLYFIN ADD ERROR] Failed for \"{movie_title}\" to collection \"{collection_name}\" (Status: {res.status_code}) - {res.text}")
@@ -238,6 +239,7 @@ def remove_movie_from_collection(collection_id, movie_id, movie_title, collectio
         )
 
         if res.status_code in [200, 204]:
+            # Status-Code war hier schon weg, bleibt somit sauber
             print(f"[JELLYFIN REMOVE] Successfully removed \"{movie_title}\" from collection \"{collection_name}\"")
             return True
         else:
@@ -246,7 +248,6 @@ def remove_movie_from_collection(collection_id, movie_id, movie_title, collectio
     except Exception as e:
         print(f"Remove from collection error for \"{movie_title}\" / \"{collection_name}\":", str(e))
         return False
-
 
 # -----------------------------
 # GENERATE GRID COVER (COLLAGE)
