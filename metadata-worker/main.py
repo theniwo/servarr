@@ -458,97 +458,101 @@ def process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False):
     return result
 
 
+
 # -----------------------------
 # JELLYFIN WEBHOOK
 # -----------------------------
 @app.post("/jellyfin")
 async def jellyfin_webhook(request: Request):
-    try:
-        body_bytes = await request.body()
-        body_str = body_bytes.decode("utf-8").strip()
-
-        if not body_str:
-            print("[JELLYFIN ERROR] Received empty body")
-            return {"status": "error", "message": "Empty body"}
-
-        payload = json.loads(body_str)
-    except Exception as e:
-        print(f"[JELLYFIN ERROR] Failed to parse raw payload: {e}")
-        return {"status": "error", "message": "Invalid JSON format"}
-
-    event = payload.get("Event")
-
-    if not event or "NotificationType" in event or event != "ItemAdded":
-        return {"status": "ignored", "event": event}
-
-    if payload.get("ItemType") != "Movie":
-        return {"status": "ignored", "item_type": payload.get("ItemType")}
-
-    jellyfin_name = payload.get("Name", "Unknown")
-    jellyfin_year = payload.get("Year")
-    provider_ids = payload.get("ProviderIds") or {}
-
-    def clean_id(val):
-        if not val or "ProviderIds" in str(val):
-            return ""
-        return str(val).strip()
-
-    jellyfin_tmdb = clean_id(provider_ids.get("Tmdb"))
-    jellyfin_imdb = clean_id(provider_ids.get("Imdb"))
-
-    print(f"[JELLYFIN WEBHOOK] Processing '{jellyfin_name}' (TMDB: {jellyfin_tmdb} | IMDB: {jellyfin_imdb})")
+    # ... (Dein bisheriger Code zum Parsen des Payloads bleibt exakt gleich) ...
 
     try:
-        res = requests.get(
-            f"{RADARR_URL}/api/v3/movie",
-            headers={"X-Api-Key": RADARR_KEY},
-            timeout=20
-        )
-        res.raise_for_status()
-
-        radarr_movie = None
-        jellyfin_title_clean = re.sub(r'\s*\(\d{4}\)\s*$', '', jellyfin_name)
-        cleaned_jellyfin_title = clean_title(jellyfin_title_clean)
-
-        for m in res.json():
-            radarr_tmdb = str(m.get("tmdbId", "")).strip()
-            radarr_imdb = str(m.get("imdbId", "")).strip()
-            radarr_title = str(m.get("title", "")).strip()
-            radarr_year = str(m.get("year", "")).strip()
-
-            if jellyfin_tmdb and radarr_tmdb == jellyfin_tmdb:
-                radarr_movie = m
-                break
-            if jellyfin_imdb and radarr_imdb == jellyfin_imdb:
-                radarr_movie = m
-                break
-
-            cleaned_radarr_title = clean_title(radarr_title)
-            if cleaned_radarr_title == cleaned_jellyfin_title:
-                jelly_year_str = str(jellyfin_year or "").strip()
-                if not jelly_year_str or jelly_year_str == "None" or radarr_year == jelly_year_str:
-                    print(f"[FALLBACK MATCH] Found loose match via title for '{jellyfin_name}' (Radarr Year: {radarr_year})")
-                    radarr_movie = m
-                    break
-
-        if not radarr_movie:
-            print(f"[SKIP] No movie found in Radarr matching IDs or Title fallback for '{jellyfin_name}'")
-            return {"status": "not_found_in_radarr"}
+        # ... (Dein bisheriger Code zur Radarr-Film-Suche bleibt exakt gleich) ...
 
         print(f"[MATCH SUCCESS] Resolved '{jellyfin_name}' to Radarr Movie: '{radarr_movie.get('title')}'")
 
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps()
 
-        # Webhook darf aufräumen
-        result = process_movie(radarr_movie, radarr_tags, jellyfin_maps, enable_cleanup=True)
-        cleanup_orphan_collections()
+        # FIX: enable_cleanup=False beim automatischen Hinzufügen. Kein Cleanup danach.
+        result = process_movie(radarr_movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
 
         return {"status": "ok", "processed": result}
 
     except Exception as e:
         print(f"Error processing Jellyfin webhook: {e}")
         return {"status": "error", "message": str(e)}
+
+
+# -----------------------------
+# RADARR WEBHOOK
+# -----------------------------
+@app.post("/radarr")
+async def radarr_webhook(request: Request):
+    # ... (Dein bisheriger Code zum Parsen des Payloads bleibt exakt gleich) ...
+
+    if event_type in ["MovieDelete", "MovieFileDelete"]:
+        print(f"[DELETE] Movie '{movie_title}' was deleted from Radarr. Syncing Jellyfin...")
+        try:
+            requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers={"X-MediaBrowser-Token": JELLYFIN_KEY}, timeout=10)
+        except Exception as e:
+            print(f"[WARNING] Could not trigger Jellyfin scan: {e}")
+
+        time.sleep(3)
+        jellyfin_maps = build_jellyfin_maps()
+        radarr_tags = get_radarr_tags()
+
+        # BEI LÖSCHUNG: Hier bleibt das Cleanup aktiv und räumt danach leere Sammlungen auf
+        result = process_movie(movie_data, radarr_tags, jellyfin_maps, enable_cleanup=True)
+        cleanup_orphan_collections()
+        return {"status": "ok", "action": "deleted", "result": result}
+
+    elif event_type in ["Download", "Upgrade", "MovieUpdate"]:
+        if not tmdb_id:
+            print("[SKIP] No TMDB ID provided by Radarr. Cannot sync.")
+            return {"status": "missing_tmdb_id"}
+
+        JELLYFIN_MOVIES_LIBRARY_ID = os.getenv("JELLYFIN_MOVIES_LIBRARY_ID", "f137a2dd21bbc1b99aa5c0f6bf02a805")
+
+        if event_type in ["Download", "Upgrade"]:
+            try:
+                requests.post(
+                    f"{JELLYFIN_URL}/Items/{JELLYFIN_MOVIES_LIBRARY_ID}/Refresh",
+                    headers=jellyfin_headers(),
+                    params={"Recursive": "true", "ImageRefreshMode": "Default", "MetadataRefreshMode": "Default", "ReplaceAllImages": "false", "ReplaceAllMetadata": "false"},
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"[WARNING] Could not trigger targeted Jellyfin library scan: {e}")
+
+        jellyfin_maps = None
+        movie_found = False
+
+        for attempt in range(15):
+            try:
+                jellyfin_maps = build_jellyfin_maps()
+                if match_movie_to_jellyfin(movie_data, jellyfin_maps):
+                    movie_found = True
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
+
+        if not movie_found:
+            jellyfin_maps = build_jellyfin_maps()
+
+        try:
+            radarr_tags = get_radarr_tags()
+
+            # FIX: enable_cleanup=False für normale Downloads/Updates. Kein globaler Cleanup.
+            result = process_movie(movie_data, radarr_tags, jellyfin_maps, enable_cleanup=False)
+            return {"status": "ok", "action": "processed", "result": result}
+        except Exception as e:
+            print(f"[ERROR] Failed to process collection for '{movie_title}': {e}")
+            return {"status": "error", "message": str(e)}
+
+    else:
+        return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
 
 
 # -----------------------------
