@@ -608,6 +608,10 @@ async def radarr_webhook(request: Request):
 
         if event_type in ["Download", "Upgrade"]:
             try:
+                # Give the file system 5 seconds to finish writing and release locks
+                print(f"[DELAY] Waiting 5 seconds for file system to release '{movie_title}' before triggering Jellyfin scan...")
+                time.sleep(5)
+
                 requests.post(
                     f"{JELLYFIN_URL}/Items/{JELLYFIN_MOVIES_LIBRARY_ID}/Refresh",
                     headers=jellyfin_headers(),
@@ -620,6 +624,7 @@ async def radarr_webhook(request: Request):
                     },
                     timeout=10
                 )
+                print(f"[JELLYFIN SCAN] Triggered targeted library refresh for '{movie_title}'")
             except Exception as e:
                 print(f"[WARNING] Could not trigger targeted Jellyfin library scan: {e}")
 
@@ -651,7 +656,6 @@ async def radarr_webhook(request: Request):
 
     else:
         return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
-
 
 # -----------------------------
 # SINGLE MOVIE SYNC
