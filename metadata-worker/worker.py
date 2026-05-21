@@ -411,8 +411,8 @@ async def jellyfin_webhook(request: Request):
         for m in res.json():
             radarr_tmdb = str(m.get("tmdbId", "")).strip()
             radarr_imdb = str(m.get("imdbId", "")).strip()
-            radarr_title = m.get("title", "")
-            radarr_year = str(m.get("year", ""))
+            radarr_title = str(m.get("title", "")).strip()
+            radarr_year = str(m.get("year", "")).strip()
 
             # 1. Attempt ID Match (only if Jellyfin actually provided IDs)
             if jellyfin_tmdb and radarr_tmdb == jellyfin_tmdb:
@@ -422,14 +422,16 @@ async def jellyfin_webhook(request: Request):
                 radarr_movie = m
                 break
 
-            # 2. Fallback: Clean Title + Year Match (if IDs didn't match or were missing)
-            if clean_title(radarr_title) == cleaned_jellyfin_title and radarr_year == str(jellyfin_year):
-                print(f"[FALLBACK MATCH] Found loose match via title/year for '{jellyfin_name}' ({jellyfin_year})")
-                radarr_movie = m
-                break
-        if not radarr_movie:
-            print(f"[SKIP] No movie found in Radarr matching IDs or Title/Year fallback for '{jellyfin_name}'")
-            return {"status": "not_found_in_radarr"}
+            # 2. Fallback: Clean Title + Year Match (with verbose logging on mismatch)
+            cleaned_radarr_title = clean_title(radarr_title)
+            if cleaned_radarr_title == cleaned_jellyfin_title:
+                # Titel stimmt, aber stimmt das Jahr?
+                if radarr_year == str(jellyfin_year).strip():
+                    print(f"[FALLBACK MATCH] Found loose match via title/year for '{jellyfin_name}' ({jellyfin_year})")
+                    radarr_movie = m
+                    break
+                else:
+                    print(f"[FALLBACK MISMATCH] Title matched '{radarr_title}', but Year differed (Radarr: {radarr_year} vs Jellyfin: {jellyfin_year})")
 
         print(f"[MATCH SUCCESS] Resolved '{jellyfin_name}' to Radarr Movie: '{radarr_movie.get('title')}'")
 
