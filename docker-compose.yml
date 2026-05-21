@@ -775,7 +775,6 @@ services:
       - PUID=1000
       - PGID=1000
     volumes:
-      - ./radarr-scripts:/scripts
       - /scratch/downloads:/data/downloads
       - radarr_config:/config
       - media:/media
