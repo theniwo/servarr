@@ -6,6 +6,7 @@ import asyncio
 import json
 import base64
 import time
+import html  # Needed to parse HTML entities like &#246;
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
@@ -51,10 +52,22 @@ def jellyfin_headers():
 # UTILS
 # -----------------------------
 def clean_title(title):
-    """Removes all special characters, spaces, and accents for loose matching."""
+    """Removes all special characters, spaces, and normalizes umlauts for loose matching."""
     if not title:
         return ""
-    title = title.lower()
+
+    # Resolve any HTML encoding and convert to lowercase
+    title = html.unescape(title).lower()
+
+    # Normalize German umlauts to their base characters for uniform matching
+    umlaut_map = {
+        'ä': 'a', 'ö': 'o', 'ü': 'u', 'ß': 'ss',
+        'ae': 'a', 'oe': 'o', 'ue': 'u'
+    }
+    for target, replacement in umlaut_map.items():
+        title = title.replace(target, replacement)
+
+    # Strip everything except alphanumeric characters
     title = re.sub(r'[^a-z0-9]', '', title)
     return title
 
@@ -484,7 +497,9 @@ async def jellyfin_webhook(request: Request):
     if payload.get("ItemType") != "Movie":
         return {"status": "ignored", "item_type": payload.get("ItemType")}
 
-    jellyfin_name = payload.get("Name", "Unknown")
+    jellyfin_name_raw = payload.get("Name", "Unknown")
+    jellyfin_name = html.unescape(jellyfin_name_raw)  # Resolve HTML characters early
+
     jellyfin_year = payload.get("Year")
     provider_ids = payload.get("ProviderIds") or {}
 
@@ -540,7 +555,7 @@ async def jellyfin_webhook(request: Request):
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps()
 
-        # Beim Hinzufügen über Jellyfin: Kein Löschvorgang (enable_cleanup=False)
+        # Safe add only (enable_cleanup=False), preventing unwanted pruning routines
         result = process_movie(radarr_movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
 
         return {"status": "ok", "processed": result}
@@ -579,7 +594,7 @@ async def radarr_webhook(request: Request):
         jellyfin_maps = build_jellyfin_maps()
         radarr_tags = get_radarr_tags()
 
-        # Bei Löschung: Aufräumen erwünscht
+        # Destructive context: retention cleanup permitted
         result = process_movie(movie_data, radarr_tags, jellyfin_maps, enable_cleanup=True)
         cleanup_orphan_collections()
         return {"status": "ok", "action": "deleted", "result": result}
@@ -627,7 +642,7 @@ async def radarr_webhook(request: Request):
         try:
             radarr_tags = get_radarr_tags()
 
-            # Bei Imports/Updates: Nur hinzufügen, kein Löschvorgang (enable_cleanup=False)
+            # Importing context: Additive only (enable_cleanup=False) to shield system against log floods
             result = process_movie(movie_data, radarr_tags, jellyfin_maps, enable_cleanup=False)
             return {"status": "ok", "action": "processed", "result": result}
         except Exception as e:
@@ -667,7 +682,7 @@ def sync_single_movie(radarr_movie_id: int):
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps()
 
-        # Manueller Sync: Darf aufräumen
+        # Intentional tag adjustment context: enable full pruning logic
         result = process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=True)
         cleanup_orphan_collections()
 
