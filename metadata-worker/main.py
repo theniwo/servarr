@@ -137,6 +137,9 @@ def build_jellyfin_maps(search_term=None):
 
 
 def match_movie_to_jellyfin(movie, maps):
+    if not maps:
+        return None
+
     # 1. Try matching by TMDB ID
     tmdb_id = str(movie.get("tmdbId") or "")
     if tmdb_id and tmdb_id in maps["tmdb"]:
@@ -347,11 +350,11 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
 
 
 # -----------------------------
-# JELLYFIN WEBHOOK (ID-BASED MATCHING)
+# JELLYFIN WEBHOOK (ID-BASED WITH NAME FALLBACK)
 # -----------------------------
 @app.post("/jellyfin")
 async def jellyfin_webhook(request: Request):
-    """Handles Jellyfin webhooks by matching strictly via TMDB/IMDb IDs to avoid naming issues."""
+    """Handles Jellyfin webhooks by matching via IDs or fallback to cleaned name and year."""
     try:
         body_bytes = await request.body()
         body_str = body_bytes.decode("utf-8").strip()
@@ -376,6 +379,7 @@ async def jellyfin_webhook(request: Request):
 
     # Log what Jellyfin sent us
     jellyfin_name = payload.get("Name", "Unknown")
+    jellyfin_year = payload.get("Year")
     provider_ids = payload.get("ProviderIds") or {}
 
     def clean_id(val):
@@ -388,12 +392,8 @@ async def jellyfin_webhook(request: Request):
 
     print(f"[JELLYFIN WEBHOOK] Processing '{jellyfin_name}' (TMDB: {jellyfin_tmdb} | IMDB: {jellyfin_imdb})")
 
-    if not jellyfin_tmdb and not jellyfin_imdb:
-        print(f"[SKIP] Jellyfin sent no valid IDs for '{jellyfin_name}'. Cannot match reliably.")
-        return {"status": "missing_ids_in_webhook"}
-
     try:
-        # Fetch all movies from Radarr to cross-reference the IDs
+        # Fetch all movies from Radarr to cross-reference
         res = requests.get(
             f"{RADARR_URL}/api/v3/movie",
             headers={"X-Api-Key": RADARR_KEY},
@@ -403,11 +403,18 @@ async def jellyfin_webhook(request: Request):
 
         radarr_movie = None
 
-        # STRICT ID MATCHING
+        # Strip string-appended years like "Movie Name (2024)" down to "Movie Name"
+        jellyfin_title_clean = re.sub(r'\s*\(\d{4}\)\s*$', '', jellyfin_name)
+        cleaned_jellyfin_title = clean_title(jellyfin_title_clean)
+
+        # MATCHING LOGIC (ID MATCH -> FALLBACK TO TITLE + YEAR)
         for m in res.json():
             radarr_tmdb = str(m.get("tmdbId", "")).strip()
             radarr_imdb = str(m.get("imdbId", "")).strip()
+            radarr_title = str(m.get("title", "")).strip()
+            radarr_year = str(m.get("year", "")).strip()
 
+            # 1. Attempt ID Match (only if Jellyfin actually provided IDs)
             if jellyfin_tmdb and radarr_tmdb == jellyfin_tmdb:
                 radarr_movie = m
                 break
@@ -415,13 +422,26 @@ async def jellyfin_webhook(request: Request):
                 radarr_movie = m
                 break
 
+            # 2. Fallback: Clean Title Match
+            cleaned_radarr_title = clean_title(radarr_title)
+            if cleaned_radarr_title == cleaned_jellyfin_title:
+                jelly_year_str = str(jellyfin_year or "").strip()
+
+                # If Jellyfin supplies a year, it must match. If it's missing/None, fallback to title match alone.
+                if not jelly_year_str or jelly_year_str == "None" or radarr_year == jelly_year_str:
+                    print(f"[FALLBACK MATCH] Found loose match via title for '{jellyfin_name}' (Radarr Year: {radarr_year})")
+                    radarr_movie = m
+                    break
+                else:
+                    print(f"[FALLBACK MISMATCH] Title matched '{radarr_title}', but Year differed (Radarr: {radarr_year} vs Jellyfin: {jellyfin_year})")
+
         if not radarr_movie:
-            print(f"[SKIP] No movie found in Radarr matching TMDB:{jellyfin_tmdb} or IMDB:{jellyfin_imdb}")
+            print(f"[SKIP] No movie found in Radarr matching IDs or Title fallback for '{jellyfin_name}'")
             return {"status": "not_found_in_radarr"}
 
         print(f"[MATCH SUCCESS] Resolved '{jellyfin_name}' to Radarr Movie: '{radarr_movie.get('title')}'")
 
-        # Dynamic search in Jellyfin map based on the clean Radarr title to find the correct Jellyfin Item ID
+        # Dynamic search in Jellyfin map based on the clean Radarr title
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps(search_term=radarr_movie.get("title"))
 
@@ -433,6 +453,7 @@ async def jellyfin_webhook(request: Request):
     except Exception as e:
         print(f"Error processing Jellyfin webhook: {e}")
         return {"status": "error", "message": str(e)}
+
 
 # -----------------------------
 # RADARR WEBHOOK (FALLBACK)
@@ -462,21 +483,16 @@ async def radarr_webhook(request: Request):
     if event_type in ["MovieDelete", "MovieFileDelete"]:
         print(f"[DELETE] Movie '{movie_title}' was deleted from Radarr. Syncing Jellyfin...")
 
-        # 1. Trigger schnell einen Library Scan, damit Jellyfin merkt, dass die Datei weg ist
         try:
             requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers={"X-MediaBrowser-Token": JELLYFIN_KEY}, timeout=10)
         except Exception as e:
             print(f"[WARNING] Could not trigger Jellyfin scan: {e}")
 
-        # 2. Kurze Pause, damit Jellyfin die Datenbank bereinigt
         time.sleep(3)
 
-        # 3. Maps neu bauen (der gelöschte Film sollte jetzt fehlen oder eine neue ID brauchen)
         jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
         radarr_tags = get_radarr_tags()
 
-        # 4. Prozessieren (deine process_movie Logik sollte erkennen, dass der Film weg ist
-        # und ihn aus den Collections werfen)
         result = process_movie(movie_data, radarr_tags, jellyfin_maps)
         return {"status": "ok", "action": "deleted", "result": result}
 
@@ -488,29 +504,59 @@ async def radarr_webhook(request: Request):
             print("[SKIP] No TMDB ID provided by Radarr. Cannot sync.")
             return {"status": "missing_tmdb_id"}
 
-        movie_folder = payload.get("movieFile", {}).get("relativePath", "") or movie_data.get("folderPath", "")
-        print(f"[JELLYFIN] Triggering targeted scan for folder: {movie_folder}")
+        JELLYFIN_MOVIES_LIBRARY_ID = os.getenv("JELLYFIN_MOVIES_LIBRARY_ID", "f137a2dd21bbc1b99aa5c0f6bf02a805")
+        print(f"[JELLYFIN] Triggering TARGETED library refresh for Movie Library ID: {JELLYFIN_MOVIES_LIBRARY_ID}")
 
+        # Targeted library item scan using the dynamic virtual folder ItemId
         try:
-            requests.post(f"{JELLYFIN_URL}/Library/Refresh", headers={"X-MediaBrowser-Token": JELLYFIN_KEY}, timeout=10)
+            requests.post(
+                f"{JELLYFIN_URL}/Items/{JELLYFIN_MOVIES_LIBRARY_ID}/Refresh",
+                headers=jellyfin_headers(),
+                params={
+                    "Recursive": "true",
+                    "ImageRefreshMode": "Default",
+                    "MetadataRefreshMode": "Default",
+                    "ReplaceAllImages": "false",
+                    "ReplaceAllMetadata": "false"
+                },
+                timeout=10
+            )
         except Exception as e:
-            print(f"[WARNING] Could not trigger Jellyfin scan: {e}")
+            print(f"[WARNING] Could not trigger targeted Jellyfin library scan: {e}")
 
-        print("[WAIT] Sleeping 5 seconds to let Jellyfin index the file...")
-        time.sleep(5)
+        print("[WAIT] Polling Jellyfin until movie is indexed and maps are ready...")
+
+        jellyfin_maps = None
+        movie_found = False
+
+        # Loop for up to 45 seconds polling every 3 seconds
+        for attempt in range(15):
+            try:
+                jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
+                if match_movie_to_jellyfin(movie_data, jellyfin_maps):
+                    movie_found = True
+                    print(f"[SUCCESS] Jellyfin indexed '{movie_title}' after {attempt * 3} seconds.")
+                    break
+            except Exception:
+                pass
+            time.sleep(3)
+
+        if not movie_found:
+            print(f"[WARN] Jellyfin indexing timed out for '{movie_title}' after 45s. Forcing processing anyway.")
+            jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
 
         try:
             radarr_tags = get_radarr_tags()
-            jellyfin_maps = build_jellyfin_maps(search_term=movie_title)
             result = process_movie(movie_data, radarr_tags, jellyfin_maps)
             return {"status": "ok", "action": "imported", "result": result}
         except Exception as e:
             print(f"[ERROR] Failed to process collection for '{movie_title}': {e}")
             return {"status": "error", "message": str(e)}
 
-    # Alle anderen Events (z.B. Test, Rename) ignorieren wir hier
     else:
         return {"status": "ignored", "reason": f"Event type '{event_type}' not handled"}
+
+
 # -----------------------------
 # FULLSCAN (DYNAMIC RATE-LIMIT)
 # -----------------------------
@@ -538,11 +584,9 @@ def fullscan(flood: bool = False):
     total_movies = len(movies)
 
     for index, movie in enumerate(movies, start=1):
-        # Process the current movie
         result = process_movie(movie, radarr_tags, jellyfin_maps)
         processed.append(result)
 
-        # Safe-mode delay: Only sleep if flood is False AND it's not the last movie
         if not flood and index < total_movies:
             print(f"[{index}/{total_movies}] Safe-mode: Sleeping 2s to protect API limits...")
             time.sleep(2)
