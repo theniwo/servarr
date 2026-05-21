@@ -328,9 +328,9 @@ def generate_collection_collage(collection_id, collection_name):
 
 
 # -----------------------------
-# CORE LOGIC
+# CORE LOGIC (SAFE FOR FULLSCAN)
 # -----------------------------
-def process_movie(movie, radarr_tags, jellyfin_maps):
+def process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False):
     tag_names = [
         radarr_tags[t].lower().strip()
         for t in movie.get("tags", [])
@@ -354,10 +354,9 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
     }
 
     if not movie_id:
-        print(f"[SKIP] Movie not found in Jellyfin: {movie_title}")
         return result
 
-    # 1. ADD to collections matching active tags
+    # 1. ADD to collections matching active tags (Immer aktiv)
     for collection_name in active_collections:
         collection_id = get_or_create_collection(collection_name)
         if not collection_id:
@@ -368,18 +367,31 @@ def process_movie(movie, radarr_tags, jellyfin_maps):
             result["added_to"].append(collection_name)
             generate_collection_collage(collection_id, collection_name)
 
-    # 2. REMOVE from collections where the tag was removed
-    for tag_key, collection_name in collection_map.items():
-        if collection_name not in active_collections:
-            collection_id = get_or_create_collection(collection_name)
-            if collection_id:
-                ok = remove_movie_from_collection(collection_id, movie_id, movie_title, collection_name)
-                if ok:
-                    result["removed_from"].append(collection_name)
-                    generate_collection_collage(collection_id, collection_name)
+    # 2. REMOVE logic (Wird beim Fullscan jetzt komplett übersprungen!)
+    if enable_cleanup:
+        for tag_key, collection_name in collection_map.items():
+            if collection_name not in active_collections:
+                # Kollektion nur suchen, NIEMALS erstellen beim Löschen
+                check_res = requests.get(
+                    f"{JELLYFIN_URL}/Items",
+                    headers=jellyfin_headers(),
+                    params={"Recursive": "true", "IncludeItemTypes": "BoxSet", "SearchTerm": collection_name},
+                    timeout=10
+                )
+                collection_id = None
+                if check_res.status_code == 200:
+                    for item in check_res.json().get("Items", []):
+                        if item["Name"].lower() == collection_name.lower():
+                            collection_id = item["Id"]
+                            break
+
+                if collection_id:
+                    ok = remove_movie_from_collection(collection_id, movie_id, movie_title, collection_name)
+                    if ok:
+                        result["removed_from"].append(collection_name)
+                        generate_collection_collage(collection_id, collection_name)
 
     return result
-
 
 # -----------------------------
 # JELLYFIN WEBHOOK
