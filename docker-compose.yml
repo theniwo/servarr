@@ -762,58 +762,15 @@ services:
       - "wud.watch.digest=true"
     profiles: ["downloader"]
 
-  radarr-db:
-    image: mariadb:10
-    command: --transaction-isolation=READ-COMMITTED --log-bin=mysqld-bin --binlog-format=ROW
-    restart: unless-stopped
-    env_file:
-      - ./global.env
-      - ./radarr-db.env
-      - ./radarr-db_root.env
-    volumes:
-      - radarr-db_data:/var/lib/mysql
-    healthcheck:
-      test: "exit 0"
-    labels:
-      - "wud.watch=true"
-      - "wud.trigger.include=local"
-      - "wud.watch.digest=true"
-
-  radarr-db_backup:
-    #image: fradelg/mysql-cron-backup:1.4.0
-    image: fradelg/mysql-cron-backup
-    #mem_limit: 256M
-    restart: always
-    depends_on:
-      - radarr-db
-    env_file:
-      - ./global.env
-      - ./radarr-db.env
-    environment:
-      - MYSQLDUMP_OPTS=--single-transaction
-      - MAX_BACKUPS=15
-      - INIT_BACKUP=1
-      # Every day at 12:00
-      - CRON_TIME=0 12 * * *
-      # Make it small
-      - GZIP_LEVEL=9
-    volumes:
-      - radarr-db_backup:/backup
-      # docker container exec baikal_db_backup_1 ls /backup
-      # docker container exec baikal_db_backup_1 /restore.sh /backup/latest.baikal.sql.gz
-    healthcheck:
-      test: "exit 0"
-
   radarr:
     image: lscr.io/linuxserver/radarr:latest
     depends_on:
       radarr-db:
-        condition: service_started
+        condition: service_healthy
     env_file:
       - ./global.env
       - ./radarr.env
       - ./radarr-db.env
-      - ./radarr-db_root.env
     environment:
       - PUID=1000
       - PGID=1000
@@ -838,6 +795,82 @@ services:
       - "wud.trigger.include=local"
       - "wud.watch.digest=true"
 
+  radarr-db:
+    image: postgres:16
+    env_file:
+      - ./radarr-db.env
+      - ./global.env
+    volumes:
+      - radarr-db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: "exit 0"
+      interval: 60s
+      timeout: 20s
+      retries: 5
+    labels:
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
+
+  radarr-db_backup:
+    image: prodrigestivill/postgres-backup-local
+    restart: unless-stopped
+    user: postgres:postgres
+    volumes:
+      - radarr-db_backup:/backups
+    links:
+      - radarr-db
+    depends_on:
+      radarr-db:
+        condition: service_healthy
+    env_file:
+      - ./radarr-db.env
+      - ./global.env
+    environment:
+      - POSTGRES_DB=radarr
+      - POSTGRES_HOST=radarr-db
+      # Don't use "s here. He doesn't like it because he just eats them.
+      - BACKUP_DIR=/backups
+      #- BACKUP_DIR=/var/lib/postgresql/data
+      - BACKUP_SUFFIX=.sql.gz
+      - POSTGRES_EXTRA_OPTS=-Z6 --schema=public --blobs
+      - SCHEDULE=@daily
+      - BACKUP_KEEP_DAYS=7
+      - BACKUP_KEEP_WEEKS=4
+      - BACKUP_KEEP_MONTHS=6
+      - HEALTHCHECK_PORT=8080
+      # Create:
+      # 'https://hub.docker.com/r/prodrigestivill/postgres-backup-local'
+      # cd /var/lib/docker/volumes/servarr_abr-db_backup/_data/
+      # mkdir daily weekly monthly last
+      # chmod 777 *
+      # docker container exec servarr-abr-db_backup-1 ls /backups/last
+      # docker container exec servarr-abr-db_backup-1 /backup.sh
+      # Restore:
+      # Take Containers down and close all apps that could sync
+      # docker compose down abr-db_backup && docker volume rm servarr_abr_postgres-data
+      # docker exec -it servarr-abr-db-1 bash
+      # psql --username=$POSTGRES_USER --dbname=postgres -W
+      # SELECT * FROM pg_stat_activity WHERE datname = 'audiobookrequest';
+      # SELECT pg_terminate_backend (<PID>) FROM pg_stat_activity WHERE pg_stat_activity.datname = 'audiobookrequest';
+      # DROP DATABASE audiobookrequest;
+      # CREATE DATABASE audiobookrequest;
+      # EXIT
+      # zcat /backups/last/audiobookrequest-latest.sql.gz | psql --username=$POSTGRES_USER --dbname=$POSTGRES_DATABASE -W
+      # Update:
+      # docker exec -it servarr-abr-db-1 bash
+      # psql --username=$POSTGRES_USER --dbname=postgres -W
+      # REINDEX DATABASE postgres;
+      # ALTER DATABASE postgres REFRESH COLLATION VERSION;
+    healthcheck:
+      test: "exit 0"
+      interval: 60s
+      timeout: 20s
+      retries: 5
+    labels:
+      - "wud.watch=true"
+      - "wud.trigger.include=local"
+      - "wud.watch.digest=true"
   metadata-worker:
     build: ./metadata-worker
     #container_name: metadata-worker
