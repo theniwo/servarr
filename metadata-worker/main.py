@@ -668,7 +668,7 @@ def sync_single_movie(radarr_movie_id: int):
         return {"status": "error", "message": str(e)}
 
 # -----------------------------
-# FULLSCAN
+# FULLSCAN (WITH INLINE PROGRESS BAR)
 # -----------------------------
 @app.post("/fullscan")
 def fullscan(flood: bool = False):
@@ -689,14 +689,24 @@ def fullscan(flood: bool = False):
     total_movies = len(movies)
 
     for index, movie in enumerate(movies, start=1):
-        result = process_movie(movie, radarr_tags, jellyfin_maps)
+        # Nutzt die sichere Fullscan-Logik ohne Lösch-Aktionen
+        result = process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
         processed.append(result)
 
-        # Die Log-Zeile wurde entfernt. Es wird im Safe-Modus nur noch still gewartet.
+        # Fortschrittsbalken berechnen (Länge: 20 Zeichen)
+        percent = (index / total_movies) * 100
+        bar_length = 20
+        filled_length = int(bar_length * index // total_movies)
+        bar = '█' * filled_length + '-' * (bar_length - filled_length)
+
+        # \r sorgt dafür, dass die Zeile im Terminal immer wieder überschrieben wird
+        print(f"\rProgress: |{bar}| {index}/{total_movies} Movies ({percent:.1f}%)", end="", flush=True)
+
         if not flood and index < total_movies:
             time.sleep(2)
 
-    print(f"Full scan completed. Processed {total_movies} movies.")
+    # Nach Abschluss einen Zeilenumbruch setzen, damit nachfolgende Logs nicht in der gleichen Zeile landen
+    print(f"\nFull scan completed. Processed {total_movies} movies.")
     return {
         "status": "ok",
         "flood_mode": flood,
