@@ -669,7 +669,7 @@ def sync_single_movie(radarr_movie_id: int):
         return {"status": "error", "message": str(e)}
 
 # -----------------------------
-# STREAMED FULLSCAN
+# STREAMED FULLSCAN (ONLY PROGRESS BAR)
 # -----------------------------
 @app.post("/fullscan")
 def fullscan(flood: bool = False):
@@ -689,22 +689,18 @@ def fullscan(flood: bool = False):
         movies = res.json()
         total_movies = len(movies)
 
-        yield f"Starting full scan of {total_movies} movies...\n"
-
         for index, movie in enumerate(movies, start=1):
-            result = process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
+            # Verarbeitet den Film im Hintergrund (Ausgabe im Server-Log, falls dort prints sind)
+            process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
 
-            # Falls etwas hinzugefügt wurde, streamen wir das sofort zum Client
-            if result["added_to"]:
-                yield f"[ADD] '{result['movie']}' -> {result['added_to']}\n"
-
-            # Der Fortschrittsbalken wird mit \r an curl gesendet
+            # Fortschrittsbalken berechnen (Länge: 30 Zeichen für bessere Optik)
             percent = (index / total_movies) * 100
-            bar_length = 20
+            bar_length = 30
             filled_length = int(bar_length * index // total_movies)
             bar = '█' * filled_length + '-' * (bar_length - filled_length)
 
-            yield f"\rProgress: |{bar}| {index}/{total_movies} Movies ({percent:.1f}%)"
+            # \r springt zum Anfang, \033[K löscht die alte Zeile komplett
+            yield f"\rProgress: |{bar}| {index}/{total_movies} Movies ({percent:.1f}%) \033[K"
 
             if not flood and index < total_movies:
                 time.sleep(2)
