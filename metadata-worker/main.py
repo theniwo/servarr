@@ -73,6 +73,109 @@ def clean_title(title):
 
 
 # -----------------------------
+# BACKGROUND CRON SCHEDULER
+# -----------------------------
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from contextlib import asynccontextmanager
+
+def scheduled_fullscan():
+    """Triggered automatically by the dynamic cron scheduler."""
+    print("\n[CRON] Starting scheduled full scan...")
+    try:
+        radarr_tags = get_radarr_tags()
+        jellyfin_maps = build_jellyfin_maps()
+
+        res = requests.get(
+            f"{RADARR_URL}/api/v3/movie",
+            headers={"X-Api-Key": RADARR_KEY},
+            timeout=20
+        )
+        res.raise_for_status()
+        movies = res.json()
+
+        print(f"[CRON] Processing {len(movies)} movies...")
+        for movie in movies:
+            process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
+
+        print("[CRON] Starting collection cleanup...")
+        cleanup_orphan_collections()
+        print("[CRON] Scheduled full scan completed successfully.\n")
+    except Exception as e:
+        print(f"[CRON ERROR] Scheduled full scan failed: {e}")
+
+
+def parse_cron_variable(cron_string: str):
+    """Parses env string and returns a valid CronTrigger or None if disabled."""
+    if not cron_string:
+        return None
+
+    cron_clean = cron_string.strip().lower()
+    if cron_clean in ["false", "disabled", "0", "none"]:
+        return None
+
+    # Handle standard crontab shorthand aliases
+    alias_map = {
+        "@hourly":   "0 * * * *",
+        "@daily":    "0 0 * * *",
+        "@midnight": "0 0 * * *",
+        "@weekly":   "0 0 * * 0",
+        "@monthly":  "1 0 0 * *",
+        "@yearly":   "0 0 1 1 *",
+        "@annually": "0 0 1 1 *"
+    }
+
+    if cron_clean in alias_map:
+        cron_clean = alias_map[cron_clean]
+
+    # Split the 5 standard cron fields (minute, hour, day, month, day_of_week)
+    fields = cron_clean.split()
+    if len(fields) != 5:
+        print(f"[CRON ERROR] Invalid cron expression format: '{cron_string}'. Expected 5 fields.")
+        return None
+
+    try:
+        return CronTrigger(
+            minute=fields[0],
+            hour=fields[1],
+            day=fields[2],
+            month=fields[3],
+            day_of_week=fields[4]
+        )
+    except Exception as e:
+        print(f"[CRON ERROR] Failed to parse cron fields '{cron_string}': {e}")
+        return None
+
+
+# Read config from environment (Default: 0 3 * * *)
+CRON_TIME = os.getenv("CRON_TIME", "0 3 * * *")
+scheduler = BackgroundScheduler()
+trigger = parse_cron_variable(CRON_TIME)
+
+if trigger:
+    scheduler.add_job(scheduled_fullscan, trigger=trigger)
+    print(f"[CRON CONFIG] Scheduled background sync active with expression: '{CRON_TIME}'")
+else:
+    print("[CRON CONFIG] Background scheduler is DISABLED via environment configuration.")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handles startup and shutdown events for the scheduler."""
+    if trigger:
+        print("[STARTUP] Launching background cron scheduler...")
+        scheduler.start()
+    else:
+        print("[STARTUP] Skipping scheduler startup (disabled).")
+    yield
+    if trigger and scheduler.running:
+        print("[SHUTDOWN] Shutting down background cron scheduler...")
+        scheduler.shutdown()
+
+# Update the FastAPI app instantiation to use the lifespan handler
+app = FastAPI(lifespan=lifespan)
+
+# -----------------------------
 # RADARR TAGS
 # -----------------------------
 def get_radarr_tags():
