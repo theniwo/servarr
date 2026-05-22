@@ -105,7 +105,7 @@ def build_jellyfin_maps(search_term=None):
         res = requests.get(
             f"{JELLYFIN_URL}/Items",
             headers=jellyfin_headers(),
-            params=params,
+            params={**params},
             timeout=30
         )
         res.raise_for_status()
@@ -154,27 +154,37 @@ def match_movie_to_jellyfin(movie, maps):
     if not maps:
         return None
 
+    # 1. Match via TMDB ID
     tmdb_id = str(movie.get("tmdbId") or "")
     if tmdb_id and tmdb_id in maps["tmdb"]:
         return maps["tmdb"][tmdb_id]
 
+    # 2. Match via IMDB ID
     imdb_id = str(movie.get("imdbId") or "")
     if imdb_id and imdb_id in maps["imdb"]:
         return maps["imdb"][imdb_id]
 
+    # 3. Match via Title Lookup
     radarr_title = movie.get("title")
     cleaned_radarr = clean_title(radarr_title)
     if cleaned_radarr and cleaned_radarr in maps["title"]:
         return maps["title"][cleaned_radarr]
 
+    # 4. Match via Folder Name (Fallback for mismatching titles/missing IDs)
     movie_path = movie.get("folderName") or movie.get("path") or ""
     if movie_path:
         folder_name = os.path.basename(os.path.normpath(movie_path)).lower()
+
         if folder_name in maps["folder"]:
             return maps["folder"][folder_name]
 
-    return None
+        # Direct folder token check to bridge heavily mismatched German/English titles
+        for j_folder, j_id in maps["folder"].items():
+            if folder_name == j_folder or folder_name in j_folder or j_folder in folder_name:
+                print(f"[FOLDER DIRECT MATCH] Matched Radarr folder '{folder_name}' with Jellyfin folder '{j_folder}'")
+                return j_id
 
+    return None
 
 # -----------------------------
 # GET OR CREATE COLLECTION
