@@ -850,3 +850,104 @@ def fullscan(flood: bool = False):
         yield "Full scan completed successfully.\n"
 
     return StreamingResponse(progress_generator(), media_type="text/plain")
+
+# -----------------------------
+# RIGOROUS CLEANUP ENDPOINT
+# -----------------------------
+@app.post("/cleanup", status_code=200)
+async def manual_rigorous_cleanup():
+    """
+    Rigorously removes movies from Jellyfin collections if they no longer
+    have the required Radarr tag or if they were deleted from Radarr.
+    """
+    print("\n[MANUAL CLEANUP] Starting rigorous collection sync...")
+    try:
+        # 1. Fetch current state from Radarr
+        radarr_tags = get_radarr_tags()
+        jellyfin_maps = build_jellyfin_maps()
+
+        res = requests.get(
+            f"{RADARR_URL}/api/v3/movie",
+            headers={"X-Api-Key": RADARR_KEY},
+            timeout=20
+        )
+        res.raise_for_status()
+        radarr_movies = {str(m.get("tmdbId")): m for m in res.json() if m.get("tmdbId")}
+
+        # 2. Get all custom collections managed by this script
+        # We assume collections are identified by having mapped movies
+        # Fetch all collections from Jellyfin
+        coll_res = requests.get(
+            f"{JELLYFIN_URL}/Items",
+            headers=jellyfin_headers(),
+            params={"IncludeItemTypes": "BoxSet", "Recursive": "true"},
+            timeout=20
+        )
+        coll_res.raise_for_status()
+        collections = coll_res.json().get("Items", [])
+
+        stats_removed = 0
+
+        for collection in collections:
+            coll_id = collection.get("Id")
+            coll_name = collection.get("Name")
+
+            # Find the matching Radarr tag name for this collection
+            # Assuming collection name matches the tag name (or mapped via your logic)
+            target_tag_id = None
+            for tag_name, tag_id in radarr_tags.items():
+                if tag_name.lower() == coll_name.lower():
+                    target_tag_id = tag_id
+                    break
+
+            if not target_tag_id:
+                # Skip collections that don't match any Radarr managed tag
+                continue
+
+            # Fetch all movies currently inside this specific Jellyfin collection
+            item_res = requests.get(
+                f"{JELLYFIN_URL}/Items",
+                headers=jellyfin_headers(),
+                params={"ParentId": coll_id, "Recursive": "true", "IncludeItemTypes": "Movie"},
+                timeout=20
+            )
+            item_res.raise_for_status()
+            jelly_movies = item_res.json().get("Items", [])
+
+            for j_movie in jelly_movies:
+                j_movie_id = j_movie.get("Id")
+                p_ids = j_movie.get("ProviderIds", {})
+                j_tmdb_id = str(p_ids.get("Tmdb", ""))
+
+                # Check if the movie exists in Radarr and still has the tag
+                should_keep = False
+                if j_tmdb_id in radarr_movies:
+                    r_movie = radarr_movies[j_tmdb_id]
+                    if target_tag_id in r_movie.get("tags", []):
+                        should_keep = True
+
+                if not should_keep:
+                    print(f"[CLEANUP] Removing '{j_movie.get('Name')}' from collection '{coll_name}' (Tag missing or deleted in Radarr)")
+
+                    # API Call to remove item from BoxSet
+                    try:
+                        del_res = requests.delete(
+                            f"{JELLYFIN_URL}/Collections/{coll_id}/Items",
+                            headers=jellyfin_headers(),
+                            params={"Ids": j_movie_id},
+                            timeout=10
+                        )
+                        del_res.raise_for_status()
+                        stats_removed += 1
+                    except Exception as e:
+                        print(f"[CLEANUP ERROR] Failed to remove item {j_movie_id}: {e}")
+
+        # Post-cleanup: Remove now empty collections
+        cleanup_orphan_collections()
+
+        print(f"[MANUAL CLEANUP] Completed. Removed {stats_removed} misplaced movies.\n")
+        return {"status": "success", "removed_movies_count": stats_removed}
+
+    except Exception as e:
+        print(f"[MANUAL CLEANUP ERROR] Dynamic cleanup failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
