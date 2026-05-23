@@ -8,13 +8,14 @@ import base64
 import time
 import html  # Needed to parse HTML entities like &#246;
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 from dotenv import load_dotenv
 from PIL import Image as PILImage
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from contextlib import asynccontextmanager
 
 load_dotenv()
-
-app = FastAPI()
 
 # -----------------------------
 # ENV
@@ -24,6 +25,8 @@ RADARR_KEY = os.getenv("RADARR_KEY")
 
 JELLYFIN_URL = os.getenv("JELLYFIN_URL")
 JELLYFIN_KEY = os.getenv("JELLYFIN_KEY")
+
+CRON_TIME = os.getenv("CRON_TIME", "0 3 * * *")
 
 # -----------------------------
 # TAG → COLLECTION MAPPING
@@ -147,6 +150,7 @@ def execute_rigorous_cleanup():
                         )
                         del_res.raise_for_status()
                         stats_removed += 1
+                        generate_collection_collage(coll_id, coll_name)
                     except Exception as e:
                         print(f"[CLEANUP WORKER ERROR] Failed to remove item {j_movie_id}: {e}")
 
@@ -156,13 +160,6 @@ def execute_rigorous_cleanup():
     except Exception as e:
         print(f"[CLEANUP WORKER ERROR] Execution failed: {e}")
         return 0
-
-# -----------------------------
-# BACKGROUND CRON SCHEDULER
-# -----------------------------
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-from contextlib import asynccontextmanager
 
 # -----------------------------
 # BACKGROUND CRON SCHEDULER
@@ -234,7 +231,6 @@ def parse_cron_variable(cron_string: str):
         return None
 
 
-CRON_TIME = os.getenv("CRON_TIME", "0 3 * * *")
 scheduler = BackgroundScheduler()
 trigger = parse_cron_variable(CRON_TIME)
 
@@ -696,7 +692,7 @@ async def jellyfin_webhook(request: Request):
         return {"status": "ignored", "item_type": payload.get("ItemType")}
 
     jellyfin_name_raw = payload.get("Name", "Unknown")
-    jellyfin_name = html.unescape(jellyfin_name_raw)  # Resolve HTML characters early
+    jellyfin_name = html.unescape(jellyfin_name_raw)
 
     jellyfin_year = payload.get("Year")
     provider_ids = payload.get("ProviderIds") or {}
@@ -753,7 +749,6 @@ async def jellyfin_webhook(request: Request):
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps()
 
-        # Safe add only (enable_cleanup=False), preventing unwanted pruning routines
         result = process_movie(radarr_movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
 
         return {"status": "ok", "processed": result}
@@ -792,7 +787,6 @@ async def radarr_webhook(request: Request):
         jellyfin_maps = build_jellyfin_maps()
         radarr_tags = get_radarr_tags()
 
-        # Destructive context: retention cleanup permitted
         result = process_movie(movie_data, radarr_tags, jellyfin_maps, enable_cleanup=True)
         cleanup_orphan_collections()
         return {"status": "ok", "action": "deleted", "result": result}
@@ -806,7 +800,6 @@ async def radarr_webhook(request: Request):
 
         if event_type in ["Download", "Upgrade"]:
             try:
-                # Give the file system 5 seconds to finish writing and release locks
                 print(f"[DELAY] Waiting 5 seconds for file system to release '{movie_title}' before triggering Jellyfin scan...")
                 time.sleep(5)
 
@@ -844,8 +837,6 @@ async def radarr_webhook(request: Request):
 
         try:
             radarr_tags = get_radarr_tags()
-
-            # Importing context: Additive only (enable_cleanup=False) to shield system against log floods
             result = process_movie(movie_data, radarr_tags, jellyfin_maps, enable_cleanup=False)
             return {"status": "ok", "action": "processed", "result": result}
         except Exception as e:
@@ -884,7 +875,6 @@ def sync_single_movie(radarr_movie_id: int):
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps()
 
-        # Intentional tag adjustment context: enable full pruning logic
         result = process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=True)
         cleanup_orphan_collections()
 
@@ -896,7 +886,7 @@ def sync_single_movie(radarr_movie_id: int):
 
 
 # -----------------------------
-# STREAMED FULLSCAN (ONLY PROGRESS BAR)
+# STREAMED FULLSCAN WITH TRACKING METRICS
 # -----------------------------
 @app.post("/fullscan")
 def fullscan(flood: bool = False):
@@ -916,8 +906,20 @@ def fullscan(flood: bool = False):
         movies = res.json()
         total_movies = len(movies)
 
+        stats = {
+            "processed": 0,
+            "skipped": 0,
+            "added_links": 0
+        }
+
         for index, movie in enumerate(movies, start=1):
-            process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
+            res_meta = process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
+
+            if res_meta.get("movie_id"):
+                stats["processed"] += 1
+                stats["added_links"] += len(res_meta.get("added_to", []))
+            else:
+                stats["skipped"] += 1
 
             percent = (index / total_movies) * 100
             bar_length = 30
@@ -930,18 +932,41 @@ def fullscan(flood: bool = False):
                 time.sleep(2)
 
         yield "\n[CLEANUP] Starting collection cleanup...\n"
-        cleanup_orphan_collections()
+        removed_count = execute_rigorous_cleanup()
 
-        yield "Full scan completed successfully.\n"
+        yield "\n========================================\n"
+        yield "       FULL SCAN COMPLETED SUCCESS      \n"
+        yield "========================================\n"
+        yield f"Total Movies Scanned:   {total_movies}\n"
+        yield f"Processed (In Library): {stats['processed']}\n"
+        yield f"Skipped (Missing):      {stats['skipped']}\n"
+        yield f"New Collection Adds:    {stats['added_links']}\n"
+        yield f"Pruned / Evicted Items: {removed_count}\n"
+        yield "========================================\n"
 
     return StreamingResponse(progress_generator(), media_type="text/plain")
 
+
 # -----------------------------
-# HTTP ENDPOINTS
+# CATCH-ALL FOR BOT SCANS (SILENT 404)
+# -----------------------------
+@app.api_route("/{path_name:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def catch_all(request: Request, path_name: str):
+    bot_keywords = [".env", "wp-admin", "xmlrpc", "config", "setup", "php", "actuator", ".json", ".aws"]
+
+    if any(keyword in path_name.lower() for keyword in bot_keywords) or path_name == "":
+        return Response(status_code=404)
+
+    print(f"[404] Unknown route accessed: {path_name}")
+    return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+
+# -----------------------------
+# MANUAL HTTP ENDPOINTS
 # -----------------------------
 @app.post("/cleanup", status_code=200)
 async def manual_rigorous_cleanup():
     """Manual endpoint trigger for the rigorous cleanup."""
-    # Run the exact same worker function used by the cron job
     removed_count = execute_rigorous_cleanup()
     return {"status": "success", "removed_movies_count": removed_count}
+
