@@ -1,3 +1,4 @@
+apscheduler
 fastapi
 uvicorn
 requests

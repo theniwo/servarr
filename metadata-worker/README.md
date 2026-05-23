@@ -145,6 +145,40 @@ This mode disables the 2-second delay entirely. The worker will process your ent
 curl -X POST "http://YOUR-WORKER-IP:8000/fullscan?flood=true"
 ```
 
+## ⏰ Automatic Background Synchronization (Cron Job)
+
+The metadata-worker includes a built-in, asynchronous scheduler. This ensures that a full scan runs automatically at regular intervals to correct any assignment errors (e.g., due to initially missing metadata IDs during live operation) in the background.
+
+The scheduler is flexibly controlled via the `CRON_TIME` environment variable.
+
+### Configuration
+
+Simply add the variable to your environment configuration (e.g., in your `docker-compose.yml`):
+
+```env
+# Example: Every day at 3:00 AM (Default value)
+CRON_TIME=0 3 * * *
+```
+
+| Value / Syntax | Description | Example |
+| :--- | :--- | :--- |
+| **false / disabled** | Completely disables the background scheduler. | `CRON_TIME=disabled` |
+| **Shorthand Aliases** | Classic cron shortcuts for typical intervals. | `@hourly`, `@daily`, `@weekly` |
+| **Standard Cron (5 fields)** | Minute Hour Day Month Day_of_Week | `*/10 * * * *` (Every 10 minutes) |
+
+
+### ⚠️ Syntax Limitations
+The internal parser is based on the standard Linux cron format (5 fields). The following extended features are not supported:
+
+No Seconds (6 fields): Expressions like */30 * * * * * (every 30 seconds) are invalid. The smallest allowed interval is 1 minute (* * * * *).
+
+No Year Field (6th field): Expressions containing a year at the end will not be accepted.
+
+Special Characters L, W, #: Specific cron logics (such as L for the last day of the month or 5#3 for the third Friday of the month) are not supported.
+
+Text Abbreviations: Please use pure numeric values for weekdays and months (e.g., 1-5 instead of MON-FRI) to prevent parsing errors.
+
+
 ## API Endpoints
 POST /radarr - Handles incoming Radarr notifications (triggers the targeted scan and starts polling).
 
