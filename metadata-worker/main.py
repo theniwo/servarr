@@ -75,13 +75,9 @@ def clean_title(title):
 # -----------------------------
 # BACKGROUND CRON SCHEDULER
 # -----------------------------
-from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.cron import CronTrigger
-from contextlib import asynccontextmanager
-
 def scheduled_fullscan():
     """Triggered automatically by the dynamic cron scheduler."""
-    print("\n[CRON] Starting scheduled full scan...")
+    print("\n[CRON] Starting scheduled nightly full sync routine...")
     try:
         radarr_tags = get_radarr_tags()
         jellyfin_maps = build_jellyfin_maps()
@@ -94,15 +90,16 @@ def scheduled_fullscan():
         res.raise_for_status()
         movies = res.json()
 
-        print(f"[CRON] Processing {len(movies)} movies...")
+        print(f"[CRON] Phase 1: Syncing {len(movies)} movies (adding missing)...")
         for movie in movies:
             process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False)
 
-        print("[CRON] Starting collection cleanup...")
-        cleanup_orphan_collections()
-        print("[CRON] Scheduled full scan completed successfully.\n")
+        print("[CRON] Phase 2: Running rigorous cleanup for removed tags/movies...")
+        removed_count = execute_rigorous_cleanup()
+
+        print(f"[CRON] Scheduled nightly routine completed. Evicted {removed_count} movies.\n")
     except Exception as e:
-        print(f"[CRON ERROR] Scheduled full scan failed: {e}")
+        print(f"[CRON ERROR] Scheduled routine failed: {e}")
 
 
 def parse_cron_variable(cron_string: str):
@@ -114,7 +111,6 @@ def parse_cron_variable(cron_string: str):
     if cron_clean in ["false", "disabled", "0", "none"]:
         return None
 
-    # Handle standard crontab shorthand aliases
     alias_map = {
         "@hourly":   "0 * * * *",
         "@daily":    "0 0 * * *",
@@ -128,7 +124,6 @@ def parse_cron_variable(cron_string: str):
     if cron_clean in alias_map:
         cron_clean = alias_map[cron_clean]
 
-    # Split the 5 standard cron fields (minute, hour, day, month, day_of_week)
     fields = cron_clean.split()
     if len(fields) != 5:
         print(f"[CRON ERROR] Invalid cron expression format: '{cron_string}'. Expected 5 fields.")
@@ -147,7 +142,6 @@ def parse_cron_variable(cron_string: str):
         return None
 
 
-# Read config from environment (Default: 0 3 * * *)
 CRON_TIME = os.getenv("CRON_TIME", "0 3 * * *")
 scheduler = BackgroundScheduler()
 trigger = parse_cron_variable(CRON_TIME)
@@ -161,7 +155,6 @@ else:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Handles startup and shutdown events for the scheduler."""
     if trigger:
         print("[STARTUP] Launching background cron scheduler...")
         scheduler.start()
@@ -172,7 +165,7 @@ async def lifespan(app: FastAPI):
         print("[SHUTDOWN] Shutting down background cron scheduler...")
         scheduler.shutdown()
 
-# Update the FastAPI app instantiation to use the lifespan handler
+
 app = FastAPI(lifespan=lifespan)
 
 # -----------------------------
@@ -583,6 +576,91 @@ def process_movie(movie, radarr_tags, jellyfin_maps, enable_cleanup=False):
 
     return result
 
+# -----------------------------
+# CORE CLEANUP LOGIC (REUSABLE)
+# -----------------------------
+def execute_rigorous_cleanup():
+    """
+    Core logic to strictly remove movies from Jellyfin collections
+    if they no longer have the required Radarr tag or were deleted.
+    """
+    print("[CLEANUP WORKER] Starting rigorous collection sync...")
+    try:
+        radarr_tags = get_radarr_tags()
+        jellyfin_maps = build_jellyfin_maps()
+
+        res = requests.get(
+            f"{RADARR_URL}/api/v3/movie",
+            headers={"X-Api-Key": RADARR_KEY},
+            timeout=20
+        )
+        res.raise_for_status()
+        radarr_movies = {str(m.get("tmdbId")): m for m in res.json() if m.get("tmdbId")}
+
+        coll_res = requests.get(
+            f"{JELLYFIN_URL}/Items",
+            headers=jellyfin_headers(),
+            params={"IncludeItemTypes": "BoxSet", "Recursive": "true"},
+            timeout=20
+        )
+        coll_res.raise_for_status()
+        collections = coll_res.json().get("Items", [])
+
+        stats_removed = 0
+
+        for collection in collections:
+            coll_id = collection.get("Id")
+            coll_name = collection.get("Name")
+
+            target_tag_id = None
+            for tag_name, tag_id in radarr_tags.items():
+                if tag_name.lower() == coll_name.lower():
+                    target_tag_id = tag_id
+                    break
+
+            if not target_tag_id:
+                continue
+
+            item_res = requests.get(
+                f"{JELLYFIN_URL}/Items",
+                headers=jellyfin_headers(),
+                params={"ParentId": coll_id, "Recursive": "true", "IncludeItemTypes": "Movie"},
+                timeout=20
+            )
+            item_res.raise_for_status()
+            jelly_movies = item_res.json().get("Items", [])
+
+            for j_movie in jelly_movies:
+                j_movie_id = j_movie.get("Id")
+                p_ids = j_movie.get("ProviderIds", {})
+                j_tmdb_id = str(p_ids.get("Tmdb", ""))
+
+                should_keep = False
+                if j_tmdb_id in radarr_movies:
+                    r_movie = radarr_movies[j_tmdb_id]
+                    if target_tag_id in r_movie.get("tags", []):
+                        should_keep = True
+
+                if not should_keep:
+                    print(f"[CLEANUP WORKER] Removing '{j_movie.get('Name')}' from collection '{coll_name}'")
+                    try:
+                        del_res = requests.delete(
+                            f"{JELLYFIN_URL}/Collections/{coll_id}/Items",
+                            headers=jellyfin_headers(),
+                            params={"Ids": j_movie_id},
+                            timeout=10
+                        )
+                        del_res.raise_for_status()
+                        stats_removed += 1
+                    except Exception as e:
+                        print(f"[CLEANUP WORKER ERROR] Failed to remove item {j_movie_id}: {e}")
+
+        cleanup_orphan_collections()
+        print(f"[CLEANUP WORKER] Completed. Removed {stats_removed} misplaced movies.")
+        return stats_removed
+    except Exception as e:
+        print(f"[CLEANUP WORKER ERROR] Execution failed: {e}")
+        return 0
 
 # -----------------------------
 # JELLYFIN WEBHOOK
@@ -852,102 +930,11 @@ def fullscan(flood: bool = False):
     return StreamingResponse(progress_generator(), media_type="text/plain")
 
 # -----------------------------
-# RIGOROUS CLEANUP ENDPOINT
+# HTTP ENDPOINTS
 # -----------------------------
 @app.post("/cleanup", status_code=200)
 async def manual_rigorous_cleanup():
-    """
-    Rigorously removes movies from Jellyfin collections if they no longer
-    have the required Radarr tag or if they were deleted from Radarr.
-    """
-    print("\n[MANUAL CLEANUP] Starting rigorous collection sync...")
-    try:
-        # 1. Fetch current state from Radarr
-        radarr_tags = get_radarr_tags()
-        jellyfin_maps = build_jellyfin_maps()
-
-        res = requests.get(
-            f"{RADARR_URL}/api/v3/movie",
-            headers={"X-Api-Key": RADARR_KEY},
-            timeout=20
-        )
-        res.raise_for_status()
-        radarr_movies = {str(m.get("tmdbId")): m for m in res.json() if m.get("tmdbId")}
-
-        # 2. Get all custom collections managed by this script
-        # We assume collections are identified by having mapped movies
-        # Fetch all collections from Jellyfin
-        coll_res = requests.get(
-            f"{JELLYFIN_URL}/Items",
-            headers=jellyfin_headers(),
-            params={"IncludeItemTypes": "BoxSet", "Recursive": "true"},
-            timeout=20
-        )
-        coll_res.raise_for_status()
-        collections = coll_res.json().get("Items", [])
-
-        stats_removed = 0
-
-        for collection in collections:
-            coll_id = collection.get("Id")
-            coll_name = collection.get("Name")
-
-            # Find the matching Radarr tag name for this collection
-            # Assuming collection name matches the tag name (or mapped via your logic)
-            target_tag_id = None
-            for tag_name, tag_id in radarr_tags.items():
-                if tag_name.lower() == coll_name.lower():
-                    target_tag_id = tag_id
-                    break
-
-            if not target_tag_id:
-                # Skip collections that don't match any Radarr managed tag
-                continue
-
-            # Fetch all movies currently inside this specific Jellyfin collection
-            item_res = requests.get(
-                f"{JELLYFIN_URL}/Items",
-                headers=jellyfin_headers(),
-                params={"ParentId": coll_id, "Recursive": "true", "IncludeItemTypes": "Movie"},
-                timeout=20
-            )
-            item_res.raise_for_status()
-            jelly_movies = item_res.json().get("Items", [])
-
-            for j_movie in jelly_movies:
-                j_movie_id = j_movie.get("Id")
-                p_ids = j_movie.get("ProviderIds", {})
-                j_tmdb_id = str(p_ids.get("Tmdb", ""))
-
-                # Check if the movie exists in Radarr and still has the tag
-                should_keep = False
-                if j_tmdb_id in radarr_movies:
-                    r_movie = radarr_movies[j_tmdb_id]
-                    if target_tag_id in r_movie.get("tags", []):
-                        should_keep = True
-
-                if not should_keep:
-                    print(f"[CLEANUP] Removing '{j_movie.get('Name')}' from collection '{coll_name}' (Tag missing or deleted in Radarr)")
-
-                    # API Call to remove item from BoxSet
-                    try:
-                        del_res = requests.delete(
-                            f"{JELLYFIN_URL}/Collections/{coll_id}/Items",
-                            headers=jellyfin_headers(),
-                            params={"Ids": j_movie_id},
-                            timeout=10
-                        )
-                        del_res.raise_for_status()
-                        stats_removed += 1
-                    except Exception as e:
-                        print(f"[CLEANUP ERROR] Failed to remove item {j_movie_id}: {e}")
-
-        # Post-cleanup: Remove now empty collections
-        cleanup_orphan_collections()
-
-        print(f"[MANUAL CLEANUP] Completed. Removed {stats_removed} misplaced movies.\n")
-        return {"status": "success", "removed_movies_count": stats_removed}
-
-    except Exception as e:
-        print(f"[MANUAL CLEANUP ERROR] Dynamic cleanup failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Manual endpoint trigger for the rigorous cleanup."""
+    # Run the exact same worker function used by the cron job
+    removed_count = execute_rigorous_cleanup()
+    return {"status": "success", "removed_movies_count": removed_count}
