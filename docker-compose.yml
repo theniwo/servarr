@@ -884,10 +884,8 @@ services:
 
   metadata-worker:
     build: ./metadata-worker
-    #container_name: metadata-worker
     working_dir: /app
     volumes:
-      - ./metadata-worker:/app
       - /mnt/MEDIA/VIDEO/Movies:/movies
     environment:
       - PYTHONUNBUFFERED=1
