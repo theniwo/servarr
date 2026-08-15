@@ -927,7 +927,7 @@ services:
       #- "wud.watch.digest=true"
 
   recyclarr:
-    image: ghcr.io/recyclarr/recyclarr
+    image: ghcr.io/recyclarr/recyclarr:8
     user: 1000:1000
     #networks: [recyclarr]
     volumes:
